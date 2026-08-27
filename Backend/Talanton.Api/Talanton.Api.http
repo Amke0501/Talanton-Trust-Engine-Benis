@@ -1,0 +1,6 @@
+@Talanton.Api_HostAddress = http://localhost:5195
+
+GET {{Talanton.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

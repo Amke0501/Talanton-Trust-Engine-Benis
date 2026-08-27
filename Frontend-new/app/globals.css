@@ -1,0 +1,191 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-serif: var(--font-fraunces), ui-serif, Georgia, serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-header: var(--header);
+  --color-header-foreground: var(--header-foreground);
+  --color-header-muted: var(--header-muted);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+
+  --color-glass-border: var(--glass-border);
+  --color-field: var(--field);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+}
+
+:root {
+  color-scheme: light;
+
+  /* Soft pale-green canvas */
+  --background: oklch(0.935 0.036 148);
+  --foreground: oklch(0.26 0.03 158);
+
+  /* Glassy translucent near-white cards */
+  --card: oklch(0.995 0.008 140 / 0.62);
+  --card-foreground: oklch(0.26 0.03 158);
+  --popover: oklch(0.99 0.008 140);
+  --popover-foreground: oklch(0.26 0.03 158);
+
+  /* Forest green brand */
+  --primary: oklch(0.46 0.1 158);
+  --primary-foreground: oklch(0.98 0.014 130);
+
+  --secondary: oklch(0.91 0.028 145);
+  --secondary-foreground: oklch(0.3 0.04 158);
+
+  --muted: oklch(0.9 0.026 146);
+  --muted-foreground: oklch(0.46 0.032 155);
+
+  /* Mint accent for active states */
+  --accent: oklch(0.88 0.072 155);
+  --accent-foreground: oklch(0.3 0.06 158);
+
+  --destructive: oklch(0.55 0.2 26);
+  --destructive-foreground: oklch(0.98 0.012 95);
+
+  --border: oklch(0.85 0.028 148);
+  --input: oklch(0.85 0.028 148);
+  --ring: oklch(0.46 0.1 158);
+
+  /* Glass surfaces */
+  --glass-border: oklch(1 0 0 / 0.55);
+  --field: oklch(0.995 0.006 140);
+
+  /* Deep green header / rail (used sparingly) */
+  --header: oklch(0.24 0.03 158);
+  --header-foreground: oklch(0.96 0.014 130);
+  --header-muted: oklch(0.72 0.05 155);
+
+  /* Amber for pending / attention */
+  --warning: oklch(0.79 0.13 78);
+  --warning-foreground: oklch(0.35 0.06 70);
+
+  --success: oklch(0.52 0.11 158);
+  --success-foreground: oklch(0.98 0.012 130);
+
+  --radius: 0.85rem;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: 'ss01', 'cv01';
+    background-image:
+      radial-gradient(
+        60rem 40rem at 15% -5%,
+        oklch(0.95 0.05 150 / 0.7),
+        transparent 60%
+      ),
+      radial-gradient(
+        50rem 40rem at 100% 0%,
+        oklch(0.9 0.06 165 / 0.55),
+        transparent 55%
+      );
+    background-attachment: fixed;
+  }
+}
+
+/* Landing page background images — override body gradient */
+.landing-bg {
+  background-image: url('/Talenton bg-desktop.png') !important;
+  background-size: cover;
+  background-position: bottom;
+  background-repeat: no-repeat;
+  background-attachment: scroll;
+}
+
+@media (max-width: 767px) {
+  .landing-bg {
+    background-image: url('/Talenton bg-mobile.png') !important;
+    background-position: bottom;
+  }
+}
+
+/* ─── Landing page entrance animations ──────────────────────────── */
+
+@keyframes fadeSlideDown {
+  from { opacity: 0; transform: translateY(-20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(32px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes heroBgZoom {
+  from { transform: scale(1.06); }
+  to   { transform: scale(1); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Navbar slides down */
+.anim-nav {
+  opacity: 0;
+  animation: fadeSlideDown 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.05s forwards;
+}
+
+/* Hero background fades + subtle zoom */
+.anim-hero-bg {
+  animation: heroBgZoom 1.4s cubic-bezier(0.22, 1, 0.36, 1) forwards,
+             fadeIn 0.8s ease forwards;
+}
+
+/* Hero heading */
+.anim-heading {
+  opacity: 0;
+  animation: fadeSlideUp 0.75s cubic-bezier(0.22, 1, 0.36, 1) 0.25s forwards;
+}
+
+/* Hero subtext */
+.anim-sub {
+  opacity: 0;
+  animation: fadeSlideUp 0.75s cubic-bezier(0.22, 1, 0.36, 1) 0.45s forwards;
+}
+
+/* Hero buttons */
+.anim-buttons {
+  opacity: 0;
+  animation: fadeSlideUp 0.75s cubic-bezier(0.22, 1, 0.36, 1) 0.65s forwards;
+}
