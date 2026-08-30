@@ -52,10 +52,53 @@ export function CommitteeDashboardView({
   const [isDisbursing, setIsDisbursing] = useState(false)
   const [disbursedSuccess, setDisbursedSuccess] = useState(application.stage === 'disbursed')
 
-  const approveCount = boardVotes.filter((v) => v.vote === 'APPROVE').length
-  const rejectCount = boardVotes.filter((v) => v.vote === 'REJECT').length
-  const abstainCount = boardVotes.filter((v) => v.vote === 'ABSTAIN' || !v.vote).length
-  const isQuorumPassed = approveCount >= 4
+  // ========== NEW: QUORUM LOGIC BASED ON LOAN SIZE ==========
+  const BIG_LOAN_THRESHOLD = 5_000_000; // 5M UGX
+  const isBigLoan = application.principal >= BIG_LOAN_THRESHOLD;
+  const requiredApprovals = isBigLoan ? 3 : 1;
+
+  // Count votes
+  const approveCount = boardVotes.filter((v) => v.vote === 'APPROVE').length;
+  const rejectCount = boardVotes.filter((v) => v.vote === 'REJECT').length;
+  const abstainCount = boardVotes.filter((v) => v.vote === 'ABSTAIN' || !v.vote).length;
+
+  // Check for Chairperson veto
+  const chairpersonVeto = boardVotes.some(
+    (v) => v.role === 'Chairperson' && v.vote === 'REJECT'
+  );
+
+  // For big loans, check if both Chairman and Treasurer approved
+  const chairmanApproved = boardVotes.some(
+    (v) => v.role === 'Chairperson' && v.vote === 'APPROVE'
+  );
+  const treasurerApproved = boardVotes.some(
+    (v) => v.role === 'Treasurer' && v.vote === 'APPROVE'
+  );
+  const hasRequiredMembers = chairmanApproved && treasurerApproved;
+
+  // Determine quorum status
+  let isQuorumPassed = false;
+  let quorumReason = '';
+
+  if (chairpersonVeto) {
+    isQuorumPassed = false;
+    quorumReason = 'Chairperson Veto: Absolute rejection applied.';
+  } else if (isBigLoan) {
+    isQuorumPassed = approveCount >= requiredApprovals && hasRequiredMembers;
+    if (approveCount < requiredApprovals) {
+      quorumReason = `Big Loan: ${approveCount}/${requiredApprovals} approvals needed. Both Chairman and Treasurer must approve.`;
+    } else if (!hasRequiredMembers) {
+      quorumReason = 'Big Loan: Chairman and Treasurer approval required.';
+    } else {
+      quorumReason = `Big Loan Approved: ${approveCount}/${requiredApprovals} approvals with required members.`;
+    }
+  } else {
+    isQuorumPassed = approveCount >= requiredApprovals;
+    quorumReason = isQuorumPassed
+      ? `Small Loan Approved: ${approveCount} approval received.`
+      : `Small Loan: Requires 1 approval (currently ${approveCount}).`;
+  }
+  // ========== END: QUORUM LOGIC ==========
 
   function handleVoteClick(role: string, vote: 'APPROVE' | 'REJECT' | 'ABSTAIN') {
     const updated = boardVotes.map((b) => (b.role === role ? { ...b, vote } : b))
@@ -132,9 +175,20 @@ export function CommitteeDashboardView({
             </span>
           ) : (
             <span className={`px-3 py-1 rounded-full text-xs font-bold ${
-              isQuorumPassed ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+              isQuorumPassed 
+                ? 'bg-emerald-100 text-emerald-800' 
+                : chairpersonVeto
+                ? 'bg-red-100 text-red-800'
+                : 'bg-amber-100 text-amber-800'
             }`}>
-              {isQuorumPassed ? 'Quorum Passed (Ready for Disbursal)' : 'Quorum Pending (4/5 Required)'}
+              {isQuorumPassed 
+                ? 'Quorum Passed ✓' 
+                : chairpersonVeto
+                ? 'Vetoed by Chairperson ✗'
+                : isBigLoan
+                ? `Big Loan: ${approveCount}/${requiredApprovals} + Chairman & Treasurer`
+                : `Small Loan: ${approveCount}/${requiredApprovals} Approval Required`
+              }
             </span>
           )}
         </div>
@@ -273,8 +327,21 @@ export function CommitteeDashboardView({
                 <div>
                   <p className="text-xs font-bold text-white">Committee Quorum Outcome Tracker</p>
                   <p className="text-[0.7rem] text-white/70 mt-0.5">
-                    {approveCount} Approvals, {rejectCount} Rejections, {abstainCount} Abstentions
+                    {isBigLoan 
+                      ? `Big Loan (≥5M): Requires ${requiredApprovals}/5 approvals + Chairman & Treasurer approval`
+                      : `Small Loan (<5M): Requires ${requiredApprovals}/5 approval`
+                    } • Currently {approveCount} Approvals, {rejectCount} Rejections, {abstainCount} Abstentions
                   </p>
+                  {chairpersonVeto && (
+                    <p className="text-[0.7rem] text-red-300 mt-1 font-semibold">
+                      ⚠️ CHAIRPERSON VETO: Absolute rejection applied.
+                    </p>
+                  )}
+                  {isBigLoan && !hasRequiredMembers && (
+                    <p className="text-[0.7rem] text-yellow-300 mt-1 font-semibold">
+                      ⚠️ MISSING REQUIRED APPROVALS: Chairman {chairmanApproved ? '✓' : '✗'} & Treasurer {treasurerApproved ? '✓' : '✗'} must approve big loans.
+                    </p>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-3">
@@ -283,7 +350,7 @@ export function CommitteeDashboardView({
                       isQuorumPassed ? 'bg-[#a4cc44] text-[#0d2a1c]' : 'bg-rose-600 text-white'
                     }`}
                   >
-                    {isQuorumPassed ? 'BOARD APPROVED (QUORUM PASSED)' : 'QUORUM BLOCKED (NEED 4 APPROVALS)'}
+                    {isQuorumPassed ? 'QUORUM PASSED ✓' : chairpersonVeto ? 'VETO APPLIED ✗' : 'QUORUM BLOCKED'}
                   </span>
 
                   {isQuorumPassed && !disbursedSuccess && (
@@ -295,6 +362,15 @@ export function CommitteeDashboardView({
                     >
                       <DollarSign className="size-4" />
                       {isDisbursing ? 'Releasing...' : 'Disburse Funds Now'}
+                    </button>
+                  )}
+                  {(chairpersonVeto || !isQuorumPassed) && !disbursedSuccess && (
+                    <button
+                      disabled
+                      className="px-5 py-2 rounded-xl bg-gray-400 text-white font-bold text-xs shadow-lg opacity-50 cursor-not-allowed flex items-center gap-1.5"
+                    >
+                      <DollarSign className="size-4" />
+                      Cannot Disburse
                     </button>
                   )}
                 </div>
