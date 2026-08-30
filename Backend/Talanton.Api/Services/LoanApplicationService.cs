@@ -682,6 +682,30 @@ public class LoanApplicationService : ILoanApplicationService
             return app;
         }
 
+        if (targetStage.Equals("disbursement", StringComparison.OrdinalIgnoreCase))
+        {
+            // Enforce quorum requirement before allowing disbursement routing
+            var quorumResult = QuorumEvaluationService.EvaluateQuorum(app.CommitteeVotes, app.Principal);
+            
+            if (!quorumResult.IsQuorumPassed)
+            {
+                app.StatusNote = $"File {reference} cannot proceed to disbursement: {quorumResult.Reason}";
+                return app;
+            }
+
+            // STEP: Lock guarantor shares when loan is disbursed
+            if (app.Guarantors != null && app.Guarantors.Count > 0)
+            {
+                app.Guarantors = GuarantorShareLockingService.LockGuarantorShares(app.Guarantors);
+            }
+
+            app.Stage = "disbursed";
+            app.Status = "disbursed";
+            app.StatusNote = $"File {reference} approved by committee and funds released. Loan is now active and in repayment.";
+            await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
+            return app;
+        }
+
         app.Stage = targetStage;
         if (targetStage == "underwriting")
         {

@@ -106,3 +106,95 @@ public class CreditPassportMemberDto
     public decimal CurrentLimit { get; set; }
     public string LastLoanDate { get; set; } = string.Empty;
 }
+
+public class QuorumCheckRequestDto
+{
+    /// <summary>
+    /// Loan reference number
+    /// </summary>
+    public string Reference { get; set; } = string.Empty;
+}
+
+public class QuorumCheckResponseDto
+{
+    /// <summary>
+    /// Whether the quorum requirement has been met.
+    /// </summary>
+    public bool IsQuorumPassed { get; set; }
+
+    /// <summary>
+    /// Human-readable explanation of the quorum status.
+    /// </summary>
+    public string Reason { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Whether this is a big loan (≥ 5M UGX).
+    /// </summary>
+    public bool IsBigLoan { get; set; }
+
+    /// <summary>
+    /// Number of approvals required for this loan.
+    /// </summary>
+    public int RequiredApprovals { get; set; }
+
+    /// <summary>
+    /// Number of approvals currently received.
+    /// </summary>
+    public int ApprovalCount { get; set; }
+
+    /// <summary>
+    /// Whether the Chairperson has cast a veto (REJECT vote).
+    /// </summary>
+    public bool HasChairpersonVeto { get; set; }
+
+    /// <summary>
+    /// For big loans: whether both Chairman and Treasurer have approved.
+    /// </summary>
+    public bool HasRequiredMembers { get; set; }
+}
+
+public class DisbursementAuthorizationDto
+{
+    /// <summary>
+    /// Role of the user requesting disbursement.
+    /// </summary>
+    public string RequestorRole { get; set; } = string.Empty;
+
+    /// <summary>
+    /// For big loans: Chairperson's cryptographic signature or authorization token.
+    /// </summary>
+    public string? ChairpersonSignature { get; set; }
+
+    /// <summary>
+    /// For big loans: Secretary's cryptographic signature or authorization token.
+    /// </summary>
+    public string? SecretarySignature { get; set; }
+
+    /// <summary>
+    /// Optional: Notes or reason for disbursement (logged to audit trail).
+    /// </summary>
+    public string? DisbursementNotes { get; set; }
+}
+
+public class DisbursementAuthorizationResponseDto
+{
+    /// <summary>
+    /// Whether the disbursement was authorized.
+    /// </summary>
+    public bool IsAuthorized { get; set; }
+
+    /// <summary>
+    /// Explanation of the authorization decision.
+    /// </summary>
+    public string Reason { get; set; } = string.Empty;
+
+    /// <summary>
+    /// If authorized: the updated loan application after disbursement.
+    /// </summary>
+    public LoanApplicationDto? UpdatedApplication { get; set; }
+
+    /// <summary>
+    /// Disbursement timestamp (UTC).
+    /// </summary>
+    public DateTime? DisbursementAt { get; set; }
+}

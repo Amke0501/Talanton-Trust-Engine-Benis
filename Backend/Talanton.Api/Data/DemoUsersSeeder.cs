@@ -114,6 +114,17 @@ public static class DemoUsersSeeder
             db.Applicants.Add(applicant);
             await db.SaveChangesAsync(cancellationToken);
         }
+
+        // Seed Ledger Accounts
+        if (!await db.LedgerAccounts.AnyAsync(cancellationToken))
+        {
+            db.LedgerAccounts.AddRange(
+                new LedgerAccount { Id = Guid.NewGuid(), Name = "SACCO Main Cash Vault", AccountType = "Cash_Vault", CurrentBalance = 30000000m },
+                new LedgerAccount { Id = Guid.NewGuid(), Name = "Commercial Bank Account", AccountType = "Bank_Current", CurrentBalance = 85000000m },
+                new LedgerAccount { Id = Guid.NewGuid(), Name = "Mobile Money Float Account", AccountType = "Mobile_Money_Float", CurrentBalance = 35000000m }
+            );
+            await db.SaveChangesAsync(cancellationToken);
+        }
     }
 
     private static async Task<Dictionary<string, Guid>> EnsureRolesAsync(ApplicationDbContext db, CancellationToken cancellationToken)
