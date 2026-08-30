@@ -146,13 +146,18 @@ export function DashboardRolePage({ role }: { role: RoleType }) {
     const routed = await signAndRouteToCommittee(application.reference, {
       appraisalOfficer: application.appraisalOfficer || 'Agaba Collins (Risk Division)',
       signature: application.securitySignature || 'OTP Signed (Verified)',
-      verdict: application.verdict || 'APPROVED',
+      verdict: (application.verdict === 'PENDING' ? 'APPROVED' : application.verdict) || 'APPROVED',
     })
     const updatedApps = await fetchApplications()
     setApplications(updatedApps)
     setLoading(false)
     if (!routed) {
-      alert('Committee routing is blocked until the applicant accepts the revised offer.')
+      const refreshedApp = updatedApps.find(a => a.reference === application.reference)
+      if (refreshedApp?.status === 'declined') {
+        alert('This file failed underwriting guardrail checks and cannot proceed to committee.')
+      } else {
+        alert('Committee routing is blocked until the applicant accepts the revised offer.')
+      }
       return
     }
     alert(`File ${application.reference} routed to Committee Board successfully.`)

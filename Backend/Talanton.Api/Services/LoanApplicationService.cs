@@ -639,6 +639,27 @@ public class LoanApplicationService : ILoanApplicationService
 
         if (targetStage.Equals("committee", StringComparison.OrdinalIgnoreCase))
         {
+            // Block declined files from reaching committee — verdict is set by UpdateUnderwritingAsync().
+            //
+            // FOLLOW-UP #1 (verdict formula mismatch): The verdict computation in
+            // UpdateUnderwritingAsync (line ~535) only checks GuardrailDepositMultiplierPassed &&
+            // GuardrailOneThirdPayPassed, whereas the frontend (underwriter-dashboard-view.tsx)
+            // also includes GuardrailGuarantorPassed in its overallPassed calculation. This
+            // mismatch should be reconciled in a separate change.
+            //
+            // FOLLOW-UP #2 (StatusNote overlap): When an applicant declines a counter-offer,
+            // both Verdict and CounterOfferStatus are set to "DECLINED". Because this verdict
+            // check fires first, the StatusNote will read "failed underwriting guardrail checks"
+            // rather than the more specific counter-offer message below. The block is correct
+            // either way; only the message is less precise for that path.
+            if (app.Verdict.Equals("DECLINED", StringComparison.OrdinalIgnoreCase))
+            {
+                app.Status = "declined";
+                app.StatusNote = $"File {reference} failed underwriting guardrail checks and cannot proceed to committee. It terminates at the underwriting desk.";
+                await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
+                return app;
+            }
+
             if (app.CounterOfferStatus == "PENDING")
             {
                 app.StatusNote = $"File {reference} cannot proceed to committee until the applicant explicitly accepts or declines the revised offer.";

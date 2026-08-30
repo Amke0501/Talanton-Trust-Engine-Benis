@@ -34,7 +34,7 @@ export interface DocumentSlot {
   hint: string
   required: boolean
   fileName?: string
-  status?: 'VERIFIED' | 'PENDING' | 'MISSING'
+  status?: 'VERIFIED' | 'PENDING' | 'MISSING' | 'REJECTED'
 }
 
 export interface Guarantor {
@@ -139,7 +139,6 @@ export interface Application extends ApplicationDraft {
   guardrailDepositMultiplierPassed?: boolean
   guardrailOneThirdPayPassed?: boolean
   guardrailGuarantorPassed?: boolean
-  verdict?: 'APPROVED' | 'DECLINED'
   verdict?: 'APPROVED' | 'DECLINED' | 'PENDING'
   counterOfferPrincipal?: number
   counterOfferTenureMonths?: number
@@ -458,6 +457,7 @@ export const STATUS_META: Record<
   draft: { label: 'Draft', tone: 'muted' },
   submitted: { label: 'Submitted', tone: 'warning' },
   in_review: { label: 'In review', tone: 'warning' },
+  counter_offer_pending: { label: 'Counter-offer', tone: 'warning' },
   approved: { label: 'Approved', tone: 'success' },
   declined: { label: 'Declined', tone: 'destructive' },
   disbursed: { label: 'Disbursed', tone: 'success' },
