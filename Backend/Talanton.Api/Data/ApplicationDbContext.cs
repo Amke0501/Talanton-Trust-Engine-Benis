@@ -52,6 +52,9 @@ public class ApplicationDbContext : DbContext
     // Audit
     public DbSet<AuditLog> AuditLogs { get; set; }
 
+    // Ledger accounts
+    public DbSet<LedgerAccount> LedgerAccounts { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);

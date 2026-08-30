@@ -140,6 +140,16 @@ CREATE TABLE IF NOT EXISTS public.portfolio_loans (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- 8. LEDGER ACCOUNTS FOR LIQUID CASH TRACKING
+CREATE TABLE IF NOT EXISTS public.ledger_accounts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT NOT NULL,
+    account_type TEXT UNIQUE NOT NULL CHECK (account_type IN ('Cash_Vault', 'Bank_Current', 'Mobile_Money_Float')),
+    current_balance NUMERIC(15, 2) NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- ==============================================================================
 -- INITIAL SEED DATA
 -- ==============================================================================
@@ -194,6 +204,14 @@ VALUES
     ('Kiiza Wholesale Co.', 'SME-0755', 'SME', 'GOLD', 83, 94, 2, 44000000, 60000000, 'Dec 2025')
 ON CONFLICT (member_id) DO NOTHING;
 
+-- Seed Ledger Accounts
+INSERT INTO public.ledger_accounts (name, account_type, current_balance)
+VALUES
+    ('SACCO Main Cash Vault', 'Cash_Vault', 30000000.00),
+    ('Commercial Bank Account', 'Bank_Current', 85000000.00),
+    ('Mobile Money Float Account', 'Mobile_Money_Float', 35000000.00)
+ON CONFLICT (account_type) DO NOTHING;
+
 -- Enable RLS
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.loan_applications ENABLE ROW LEVEL SECURITY;
@@ -202,6 +220,7 @@ ALTER TABLE public.guarantors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.committee_votes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.credit_passports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.portfolio_loans ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ledger_accounts ENABLE ROW LEVEL SECURITY;
 
 -- Permissive public policies for SACCO demo
 CREATE POLICY "Public read profiles" ON public.profiles FOR SELECT USING (true);
@@ -224,6 +243,9 @@ CREATE POLICY "Public write credit_passports" ON public.credit_passports FOR ALL
 
 CREATE POLICY "Public read portfolio_loans" ON public.portfolio_loans FOR SELECT USING (true);
 CREATE POLICY "Public write portfolio_loans" ON public.portfolio_loans FOR ALL USING (true);
+
+CREATE POLICY "Public read ledger_accounts" ON public.ledger_accounts FOR SELECT USING (true);
+CREATE POLICY "Public write ledger_accounts" ON public.ledger_accounts FOR ALL USING (true);
 
 -- ==============================================================================
 -- 8. STORAGE BUCKET FOR COMPLIANCE & KYC DOCUMENTS (S3-Compatible)
