@@ -487,6 +487,7 @@ export async function signAndRouteToCommittee(
   })
 
   if (updatedFromBackend?.counterOfferStatus === 'PENDING') return false
+  if (updatedFromBackend?.status === 'declined') return false
 
   memoryApplications = memoryApplications.map((app) => {
     if (app.reference === reference) {

@@ -4,8 +4,7 @@ import Link from 'next/link'
 import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { FormEvent, useMemo, useState } from 'react'
-import { ArrowLeft, Eye, EyeOff } from 'lucide-react'
-import { demoLogin } from '@/lib/api-service'
+import { Eye, EyeOff, ArrowLeft } from 'lucide-react'
 import {
   AUTH_COOKIE_NAME,
   ROLE_COOKIE_NAME,

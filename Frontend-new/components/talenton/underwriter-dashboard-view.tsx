@@ -70,6 +70,7 @@ export function UnderwriterDashboardView({
   const [newGMemberId, setNewGMemberId] = useState('')
   const [newGPledged, setNewGPledged] = useState('')
   const [isSigning, setIsSigning] = useState(false)
+  const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null)
 
   // ----------------------------------------------------
   // Guardrail Check Engine Computations
@@ -122,6 +123,7 @@ export function UnderwriterDashboardView({
 
   async function handleSignAndRoute() {
     setIsSigning(true)
+    setFeedbackMsg(null)
     const updatedFields: Partial<Application> = {
       applicantType: classification,
       multiplier,
@@ -166,6 +168,10 @@ export function UnderwriterDashboardView({
     onUpdateApplication({ ...updatedFields, ...(underwritingResult || {}) })
     setIsSigning(false)
     if (underwritingResult?.counterOfferStatus === 'PENDING') return
+    if (!overallPassed) {
+      setFeedbackMsg('This file failed underwriting guardrail checks and cannot proceed to committee. It terminates at the underwriting desk.')
+      return
+    }
     onRouteToCommittee()
   }
 
@@ -480,6 +486,11 @@ export function UnderwriterDashboardView({
 
               {/* Digital Sign-off & Route Action */}
               <div className="pt-4 border-t border-gray-100 space-y-3">
+                {feedbackMsg && (
+                  <div className="p-3 bg-rose-50 text-rose-800 text-xs rounded-xl border border-rose-100 font-medium">
+                    {feedbackMsg}
+                  </div>
+                )}
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-gray-500">Appraisal Officer Signature:</span>
                   <span className="font-semibold text-emerald-800 flex items-center gap-1">

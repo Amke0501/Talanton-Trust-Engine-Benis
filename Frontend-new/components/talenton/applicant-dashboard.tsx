@@ -25,13 +25,13 @@ export function ApplicantDashboard({
   applications,
   onNew,
   onResumeDraft,
+  onCounterOfferDecision,
 }: {
   userName: string
   applications: Application[]
   onNew: () => void
   onResumeDraft?: (app: Application) => void
   onCounterOfferDecision?: (decision: 'ACCEPT' | 'DECLINE') => Promise<void>
-  onCounterOfferDecision,
 }) {
   const firstName = userName.split(' ')[0] || 'there'
 
