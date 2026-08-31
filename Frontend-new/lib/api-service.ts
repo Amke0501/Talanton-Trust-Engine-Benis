@@ -405,7 +405,7 @@ export async function updateUnderwritingOverride(
     adjustmentReason?: string
   }
 ): Promise<Application | undefined> {
-  const updatedFromBackend = await requestBackend<Application>(`/api/loan-applications/${encodeURIComponent(reference)}/underwrite`, {
+  const updatedFromBackend = await requestBackend<Application>(`/api/loanapplications/${encodeURIComponent(reference)}/underwrite`, {
     method: 'PUT',
     body: JSON.stringify({
       applicantType: payload.applicantType,
@@ -453,7 +453,7 @@ export async function respondToCounterOffer(
   reference: string,
   decision: 'ACCEPT' | 'DECLINE'
 ): Promise<Application | undefined> {
-  const updatedFromBackend = await requestBackend<Application>(`/api/loan-applications/${encodeURIComponent(reference)}/counter-offer`, {
+  const updatedFromBackend = await requestBackend<Application>(`/api/loanapplications/${encodeURIComponent(reference)}/counter-offer`, {
     method: 'POST',
     body: JSON.stringify({ decision }),
   })
@@ -482,7 +482,7 @@ export async function signAndRouteToCommittee(
     verdict: 'APPROVED' | 'DECLINED'
   }
 ): Promise<boolean> {
-  const updatedFromBackend = await requestBackend<Application>(`/api/loan-applications/${encodeURIComponent(reference)}/route?stage=committee`, {
+  const updatedFromBackend = await requestBackend<Application>(`/api/loanapplications/${encodeURIComponent(reference)}/route?stage=committee`, {
     method: 'POST',
   })
 
