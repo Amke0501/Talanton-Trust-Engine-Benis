@@ -7,13 +7,23 @@ using Talanton.Api.Services.Interfaces;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Allowed browser origins come from configuration so that a new frontend deployment
+// (a Vercel preview URL, a renamed project) does not require a code change.
+//   Exact origins:  Cors:AllowedOrigins        or env CORS_ALLOWED_ORIGINS
+//   Wildcards:      Cors:AllowedOriginPatterns or env CORS_ALLOWED_ORIGIN_PATTERNS
+// Both accept a comma-separated string; the defaults below apply when neither is set.
+var allowedOrigins = ReadOriginList(builder.Configuration, "Cors:AllowedOrigins", "CORS_ALLOWED_ORIGINS", DefaultAllowedOrigins());
+var allowedOriginPatterns = ReadOriginList(builder.Configuration, "Cors:AllowedOriginPatterns", "CORS_ALLOWED_ORIGIN_PATTERNS", DefaultAllowedOriginPatterns());
+
+Console.WriteLine($"[DEBUG] CORS allowed origins: {string.Join(", ", allowedOrigins)}");
+Console.WriteLine($"[DEBUG] CORS allowed origin patterns: {string.Join(", ", allowedOriginPatterns)}");
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("FrontendPolicy", policy =>
     {
         policy
-            .WithOrigins("http://localhost:5173", "http://localhost:3000","http://localhost:3001","https://talanton-trust-engine.vercel.app",
-"https://talanton-trust-engine-7.onrender.com")
+            .SetIsOriginAllowed(origin => IsOriginAllowed(origin, allowedOrigins, allowedOriginPatterns))
             .AllowAnyHeader()
             .AllowAnyMethod();
     });
@@ -116,5 +126,89 @@ static string? FirstNonEmpty(params string?[] values)
     }
 
     return null;
+}
+
+static string[] DefaultAllowedOrigins() =>
+[
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "https://talanton-trust-engine.vercel.app",
+    "https://talanton-trust-engine-7.onrender.com"
+];
+
+// Vercel gives every preview deployment its own hostname, so the project's preview
+// range is matched by pattern rather than listed origin by origin.
+static string[] DefaultAllowedOriginPatterns() =>
+[
+    "https://talanton-trust-engine-*-amke0501s-projects.vercel.app"
+];
+
+/// <summary>
+/// Reads a list of origins from an appsettings array, a colon-key, or an environment
+/// variable. Comma- and semicolon-separated values are accepted so the list can be set
+/// as a single environment variable on hosts such as Render.
+/// </summary>
+static string[] ReadOriginList(IConfiguration configuration, string sectionKey, string environmentKey, string[] fallback)
+{
+    var fromSection = configuration.GetSection(sectionKey).Get<string[]>();
+    if (fromSection is { Length: > 0 })
+    {
+        return Split(fromSection);
+    }
+
+    var raw = FirstNonEmpty(configuration[sectionKey], configuration[environmentKey]);
+    if (!string.IsNullOrWhiteSpace(raw))
+    {
+        return Split([raw]);
+    }
+
+    return fallback;
+
+    static string[] Split(string[] values) => values
+        .SelectMany(value => value.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        .Select(value => value.TrimEnd('/'))
+        .Where(value => !string.IsNullOrWhiteSpace(value))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+}
+
+/// <summary>
+/// Matches a request origin against the exact allow-list first, then the wildcard
+/// patterns. A "*" in a pattern matches any run of characters except "/", so it cannot
+/// widen a match past the hostname.
+/// </summary>
+static bool IsOriginAllowed(string origin, string[] allowedOrigins, string[] allowedPatterns)
+{
+    if (string.IsNullOrWhiteSpace(origin))
+    {
+        return false;
+    }
+
+    var candidate = origin.TrimEnd('/');
+
+    if (allowedOrigins.Contains(candidate, StringComparer.OrdinalIgnoreCase))
+    {
+        return true;
+    }
+
+    foreach (var pattern in allowedPatterns)
+    {
+        if (pattern == "*")
+        {
+            return true;
+        }
+
+        var expression = "^" + string.Join(
+            "[^/]*",
+            pattern.Split('*').Select(System.Text.RegularExpressions.Regex.Escape)) + "$";
+
+        if (System.Text.RegularExpressions.Regex.IsMatch(candidate, expression, System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+        {
+            return true;
+        }
+    }
+
+    return false;
 }
 
