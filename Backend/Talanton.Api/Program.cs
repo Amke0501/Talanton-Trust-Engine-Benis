@@ -81,16 +81,26 @@ using (var scope = app.Services.CreateScope())
     var reachable = false;
     try
     {
-        reachable = await db.Database.CanConnectAsync();
-        Console.WriteLine(reachable
-            ? "[STARTUP] Database connection: OK"
-            : "[ERROR] Database connection: UNREACHABLE. Every database-backed endpoint will fail. " +
-              "Check SUPABASE_DB_CONNECTION — it must be in Npgsql key-value form " +
-              "(Host=...;Port=...;Database=...;Username=...;Password=...;SSL Mode=Require), not a postgres:// URI.");
+        // Open the connection rather than calling CanConnectAsync(): that swallows the
+        // underlying exception and returns a bare false, which says nothing about whether
+        // the string is malformed, the host is unreachable, or TLS failed.
+        await db.Database.OpenConnectionAsync();
+        await db.Database.CloseConnectionAsync();
+        reachable = true;
+        Console.WriteLine("[STARTUP] Database connection: OK");
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"[ERROR] Database connection check threw {ex.GetType().Name}: {ex.Message}");
+        Console.WriteLine($"[ERROR] Database connection: UNREACHABLE ({ex.GetType().Name}): {ex.Message}");
+        if (ex.InnerException is not null)
+        {
+            Console.WriteLine($"[ERROR]   caused by ({ex.InnerException.GetType().Name}): {ex.InnerException.Message}");
+        }
+        Console.WriteLine("[ERROR] Every database-backed endpoint will fail. Check SUPABASE_DB_CONNECTION:");
+        Console.WriteLine("[ERROR]   - it must be Npgsql key-value form, not a postgres:// URI");
+        Console.WriteLine("[ERROR]   - Supabase's pooler presents a self-signed certificate, so it needs " +
+                          "'SSL Mode=Require;Trust Server Certificate=true' — without the trust flag Npgsql " +
+                          "rejects the chain and the failure looks identical to an unreachable host");
     }
 
     if (reachable)
