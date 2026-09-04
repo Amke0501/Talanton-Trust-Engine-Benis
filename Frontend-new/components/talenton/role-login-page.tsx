@@ -9,6 +9,10 @@ import {
   AUTH_COOKIE_NAME,
   ROLE_COOKIE_NAME,
   USER_EMAIL_COOKIE_NAME,
+  SEAT_COOKIE_NAME,
+  COMMITTEE_SEATS,
+  DEFAULT_COMMITTEE_SEAT,
+  type CommitteeSeat,
 } from '@/lib/role-access'
 import type { RoleType } from '@/lib/talenton-data'
 
@@ -202,6 +206,7 @@ export function RoleLoginPage({ role }: { role: RoleType }) {
   const [showPw, setShowPw]     = useState(false)
   const [error, setError]       = useState('')
   const [loading, setLoading]   = useState(false)
+  const [seat, setSeat]         = useState<CommitteeSeat>(DEFAULT_COMMITTEE_SEAT)
 
   const meta = useMemo(() => ROLE_META[role], [role])
 
@@ -213,6 +218,11 @@ export function RoleLoginPage({ role }: { role: RoleType }) {
     document.cookie = `${AUTH_COOKIE_NAME}=1; path=/; samesite=lax`
     document.cookie = `${ROLE_COOKIE_NAME}=${role}; path=/; samesite=lax`
     document.cookie = `${USER_EMAIL_COOKIE_NAME}=${encodeURIComponent(resolvedEmail)}; path=/; samesite=lax`
+    // Committee members share one portal but sit in different seats, and the seat decides whose
+    // vote counts toward quorum and who may release funds.
+    if (role === 'committee') {
+      document.cookie = `${SEAT_COOKIE_NAME}=${encodeURIComponent(seat)}; path=/; samesite=lax`
+    }
     router.replace(`/dashboard/${role}`)
   }
 
@@ -361,6 +371,25 @@ export function RoleLoginPage({ role }: { role: RoleType }) {
                     </button>
                   </div>
                 </label>
+
+                {/* Committee seat */}
+                {role === 'committee' && (
+                  <label className="flex flex-col gap-2">
+                    <span className="text-sm font-semibold text-[#103a27]">Your seat on the board</span>
+                    <select
+                      value={seat}
+                      onChange={(e) => setSeat(e.target.value as CommitteeSeat)}
+                      className="w-full rounded-[2rem] border border-gray-300 bg-white px-6 py-4 text-base text-[#103a27] outline-none transition focus:border-[#103a27] cursor-pointer"
+                    >
+                      {COMMITTEE_SEATS.map((s) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                    <span className="text-xs text-gray-500">
+                      Determines which vote you cast and whether you may release funds.
+                    </span>
+                  </label>
+                )}
 
                 {/* Error */}
                 {error && (

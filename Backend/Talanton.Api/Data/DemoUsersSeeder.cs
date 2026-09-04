@@ -12,6 +12,16 @@ public static class DemoUsersSeeder
         new("applicant@talanton.demo", "Demo123!", "Demo Applicant", "Applicant"),
         new("underwriter@talanton.demo", "Demo123!", "Demo Underwriter", "Underwriter"),
         new("committee@talanton.demo", "Demo123!", "Demo Committee", "Committee"),
+
+        // One account per seat on the board. Everyone here signs into the same committee portal;
+        // the seat they hold decides whose approval counts toward quorum and who may release
+        // funds. Before these existed there was a single shared committee login, so "the wrong
+        // person tries to disburse" could not be expressed, let alone tested.
+        new("chairperson@talanton.demo", "Demo123!", "Chairperson", "Committee"),
+        new("treasurer@talanton.demo", "Demo123!", "Treasurer", "Committee"),
+        new("secretary@talanton.demo", "Demo123!", "Secretary", "Committee"),
+        new("creditofficer@talanton.demo", "Demo123!", "Credit Officer", "Committee"),
+        new("boardmember@talanton.demo", "Demo123!", "Board Member", "Committee"),
     };
 
     private static readonly (string Name, string Description)[] Roles =

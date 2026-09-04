@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   ArrowLeft,
   CheckCircle2,
@@ -25,6 +25,7 @@ import {
 } from '@/lib/talenton-data'
 import { Card, CardBody } from '@/components/talenton/primitives'
 import { disburseLoan } from '@/lib/api-service'
+import { readSeatFromCookie, type CommitteeSeat } from '@/lib/role-access'
 
 export function CommitteeDashboardView({
   application,
@@ -50,9 +51,10 @@ export function CommitteeDashboardView({
   const [portfolioLoans, setPortfolioLoans] = useState<PortfolioLoan[]>(SEED_PORTFOLIO_LOANS)
   const [portfolioFilter, setPortfolioFilter] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'ACTIVE' | 'COMPLETED' | 'REJECTED'>('ALL')
   const [isDisbursing, setIsDisbursing] = useState(false)
-  // Who is acting. Committee members do not yet have individual logins, so the release role is
-  // chosen here — without it there is no way to exercise "the wrong person tries to disburse".
-  const [actingRole, setActingRole] = useState('Treasurer')
+  // The seat this member signed in under. It decides which vote they may cast and whether they
+  // are permitted to release funds; the server re-checks both.
+  const [seat, setSeat] = useState<CommitteeSeat | null>(null)
+  useEffect(() => { setSeat(readSeatFromCookie()) }, [])
   const [disburseError, setDisburseError] = useState<string | null>(null)
   const [disbursedSuccess, setDisbursedSuccess] = useState(application.stage === 'disbursed')
 
@@ -105,6 +107,9 @@ export function CommitteeDashboardView({
   // ========== END: QUORUM LOGIC ==========
 
   function handleVoteClick(role: string, vote: 'APPROVE' | 'REJECT' | 'ABSTAIN') {
+    // A member casts only their own vote. One committee session used to be able to click through
+    // all five seats, which made quorum trivially satisfiable by a single person.
+    if (seat !== null && role !== seat) return
     const updated = boardVotes.map((b) => (b.role === role ? { ...b, vote } : b))
     setBoardVotes(updated)
     onCastVote(role, vote)
@@ -113,7 +118,7 @@ export function CommitteeDashboardView({
   async function handleDisburseFunds() {
     setIsDisbursing(true)
     setDisburseError(null)
-    const outcome = await disburseLoan(application.reference, actingRole)
+    const outcome = await disburseLoan(application.reference, seat ?? '')
     setIsDisbursing(false)
 
     if (!outcome.ok) {
@@ -277,14 +282,24 @@ export function CommitteeDashboardView({
                   const isApprove = mem.vote === 'APPROVE'
                   const isReject = mem.vote === 'REJECT'
                   const isAbstain = mem.vote === 'ABSTAIN' || !mem.vote
+                  const isOwnSeat = seat === null || mem.role === seat
                   return (
                     <div
                       key={mem.role}
-                      className="flex flex-col justify-between rounded-2xl border border-gray-100 bg-[#f4f5f4] p-3 text-center space-y-3"
+                      className={`flex flex-col justify-between rounded-2xl border p-3 text-center space-y-3 ${
+                        isOwnSeat
+                          ? 'border-[#a4cc44] bg-[#f2f7e4] ring-1 ring-[#a4cc44]'
+                          : 'border-gray-100 bg-[#f4f5f4]'
+                      }`}
                     >
                       <div>
                         <p className="text-xs font-bold text-[#103a27]">{mem.name}</p>
                         <p className="text-[0.65rem] text-gray-500 font-medium">{mem.role}</p>
+                        {isOwnSeat && (
+                          <p className="text-[0.6rem] font-bold uppercase tracking-widest text-[#5d7a1a] mt-0.5">
+                            Your seat
+                          </p>
+                        )}
                       </div>
 
                       {/* Vote Buttons */}
@@ -292,8 +307,9 @@ export function CommitteeDashboardView({
                         <button
                           type="button"
                           onClick={() => handleVoteClick(mem.role, 'APPROVE')}
-                          title="Approve loan"
-                          className={`size-7 rounded-full flex items-center justify-center transition-all cursor-pointer ${
+                          disabled={!isOwnSeat}
+                          title={isOwnSeat ? 'Approve loan' : `Only ${mem.role} can cast this vote`}
+                          className={`size-7 rounded-full flex items-center justify-center transition-all ${isOwnSeat ? 'cursor-pointer' : 'cursor-not-allowed opacity-40'} ${
                             isApprove ? 'bg-emerald-600 text-white shadow-md' : 'bg-white text-gray-400 hover:bg-emerald-50 hover:text-emerald-700'
                           }`}
                         >
@@ -302,8 +318,9 @@ export function CommitteeDashboardView({
                         <button
                           type="button"
                           onClick={() => handleVoteClick(mem.role, 'REJECT')}
-                          title="Reject loan"
-                          className={`size-7 rounded-full flex items-center justify-center transition-all cursor-pointer ${
+                          disabled={!isOwnSeat}
+                          title={isOwnSeat ? 'Reject loan' : `Only ${mem.role} can cast this vote`}
+                          className={`size-7 rounded-full flex items-center justify-center transition-all ${isOwnSeat ? 'cursor-pointer' : 'cursor-not-allowed opacity-40'} ${
                             isReject ? 'bg-rose-600 text-white shadow-md' : 'bg-white text-gray-400 hover:bg-rose-50 hover:text-rose-700'
                           }`}
                         >
@@ -312,8 +329,9 @@ export function CommitteeDashboardView({
                         <button
                           type="button"
                           onClick={() => handleVoteClick(mem.role, 'ABSTAIN')}
-                          title="Abstain"
-                          className={`size-7 rounded-full flex items-center justify-center transition-all cursor-pointer ${
+                          disabled={!isOwnSeat}
+                          title={isOwnSeat ? 'Abstain' : `Only ${mem.role} can cast this vote`}
+                          className={`size-7 rounded-full flex items-center justify-center transition-all ${isOwnSeat ? 'cursor-pointer' : 'cursor-not-allowed opacity-40'} ${
                             isAbstain ? 'bg-slate-700 text-white shadow-md' : 'bg-white text-gray-400 hover:bg-slate-100'
                           }`}
                         >
@@ -364,19 +382,10 @@ export function CommitteeDashboardView({
                     {isQuorumPassed ? 'QUORUM PASSED ✓' : chairpersonVeto ? 'VETO APPLIED ✗' : 'QUORUM BLOCKED'}
                   </span>
 
-                  {isQuorumPassed && !disbursedSuccess && (
-                    <label className="flex items-center gap-2 text-[0.7rem] font-semibold text-white/80">
-                      Acting as
-                      <select
-                        value={actingRole}
-                        onChange={(e) => { setActingRole(e.target.value); setDisburseError(null) }}
-                        className="rounded-lg bg-white/10 border border-white/25 px-2 py-1.5 text-[0.7rem] font-bold text-white cursor-pointer"
-                      >
-                        {['Treasurer', 'Chairperson', 'Secretary', 'Credit Officer', 'Board Member'].map((r) => (
-                          <option key={r} value={r} className="text-[#0d2a1c]">{r}</option>
-                        ))}
-                      </select>
-                    </label>
+                  {isQuorumPassed && !disbursedSuccess && seat && (
+                    <span className="text-[0.7rem] font-semibold text-white/70">
+                      Signed in as <strong className="text-[#a4cc44]">{seat}</strong>
+                    </span>
                   )}
 
                   {isQuorumPassed && !disbursedSuccess && (
