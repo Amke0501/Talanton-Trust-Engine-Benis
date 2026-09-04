@@ -71,16 +71,60 @@ builder.Services.AddScoped<ILoanApplicationService, LoanApplicationService>();
 
 var app = builder.Build();
 
+// Startup database check. Each step reports its own outcome: a service that cannot reach
+// its database still answers on the endpoints backed by in-memory data, which previously
+// made a completely disconnected database look like a healthy deployment.
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+    var reachable = false;
     try
     {
-        await DemoUsersSeeder.SeedAsync(db);
+        reachable = await db.Database.CanConnectAsync();
+        Console.WriteLine(reachable
+            ? "[STARTUP] Database connection: OK"
+            : "[ERROR] Database connection: UNREACHABLE. Every database-backed endpoint will fail. " +
+              "Check SUPABASE_DB_CONNECTION — it must be in Npgsql key-value form " +
+              "(Host=...;Port=...;Database=...;Username=...;Password=...;SSL Mode=Require), not a postgres:// URI.");
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"[WARNING] Database seeding warning: {ex.Message}");
+        Console.WriteLine($"[ERROR] Database connection check threw {ex.GetType().Name}: {ex.Message}");
+    }
+
+    if (reachable)
+    {
+        try
+        {
+            var pending = (await db.Database.GetPendingMigrationsAsync()).ToList();
+            if (pending.Count == 0)
+            {
+                Console.WriteLine("[STARTUP] Migrations: up to date");
+            }
+            else
+            {
+                Console.WriteLine($"[STARTUP] Migrations: applying {pending.Count} pending ({string.Join(", ", pending)})");
+                await db.Database.MigrateAsync();
+                Console.WriteLine("[STARTUP] Migrations: applied");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ERROR] Migration failed ({ex.GetType().Name}): {ex.Message}. " +
+                              "Tables added by unapplied migrations will return 500 until this is resolved.");
+        }
+
+        try
+        {
+            await DemoUsersSeeder.SeedAsync(db);
+            Console.WriteLine("[STARTUP] Demo user seeding: OK");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ERROR] Demo user seeding failed ({ex.GetType().Name}): {ex.Message}. " +
+                              "Login will reject valid demo credentials.");
+        }
     }
 }
 

@@ -330,7 +330,10 @@ public class LoanApplicationService : ILoanApplicationService
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[WARNING] Exception retrieving applications from EF Core DB: {ex.Message}");
+            // Falling through leaves only the hard-coded demo files in the response, which is
+            // indistinguishable from a healthy empty database unless the consequence is stated.
+            Console.WriteLine($"[ERROR] Could not read loan applications from the database ({ex.GetType().Name}): {ex.Message}. " +
+                              "Returning in-memory demo data only — persisted applications will be missing from every list and detail view.");
         }
 
         foreach (var memApp in Applications)
@@ -451,7 +454,10 @@ public class LoanApplicationService : ILoanApplicationService
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[WARNING] Exception saving loan application to EF Core DB: {ex.Message}");
+            // The caller still receives a created DTO, so a failure here silently produces an
+            // application that exists for this process only and disappears on restart.
+            Console.WriteLine($"[ERROR] Could not save the new loan application to the database ({ex.GetType().Name}): {ex.Message}. " +
+                              "The application was returned to the caller but has NOT been persisted.");
         }
 
         var createdDto = new LoanApplicationDto

@@ -15,15 +15,41 @@ import { getSupabase, isSupabaseConfigured } from './supabase'
 
 const BACKEND_API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5195'
 
+/** Why the last backend call did not return data. Callers that must fail closed should
+ *  check this rather than treating `undefined` as "the server had nothing to say" — a
+ *  rejection and an unreachable server are very different answers. */
+export type BackendFailure = 'rejected' | 'unreachable' | null
+let lastBackendFailure: BackendFailure = null
+export function getLastBackendFailure(): BackendFailure {
+  return lastBackendFailure
+}
+
 async function requestBackend<T>(path: string, options: RequestInit): Promise<T | undefined> {
+  const url = `${BACKEND_API_BASE_URL}${path}`
   try {
-    const response = await fetch(`${BACKEND_API_BASE_URL}${path}`, {
+    const response = await fetch(url, {
       ...options,
       headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     })
-    if (!response.ok) return undefined
-    return await response.json() as T
-  } catch {
+    if (!response.ok) {
+      lastBackendFailure = 'rejected'
+      const body = await response.text().catch(() => '')
+      console.error(
+        `[API] ${options.method || 'GET'} ${path} rejected with ${response.status} ${response.statusText}. ` +
+          `The change was NOT applied on the server.${body ? ` Response: ${body.slice(0, 300)}` : ''}`
+      )
+      return undefined
+    }
+    lastBackendFailure = null
+    return (await response.json()) as T
+  } catch (error) {
+    lastBackendFailure = 'unreachable'
+    console.error(
+      `[API] ${options.method || 'GET'} ${path} could not reach the server at ${BACKEND_API_BASE_URL}. ` +
+        `Falling back to local state, so what you see is NOT what the server holds. ` +
+        `Check NEXT_PUBLIC_API_URL and that the origin is allowed by CORS.`,
+      error
+    )
     return undefined
   }
 }
@@ -608,10 +634,18 @@ export async function disburseLoan(reference: string, requestorRole: string = 'T
       })
 
       if (!response.ok) {
-        console.warn(`Backend disbursement failed with status ${response.status}`)
+        const body = await response.text().catch(() => '')
+        console.error(
+          `[API] Disbursement of ${reference} was REFUSED by the server (${response.status} ${response.statusText}). ` +
+            `The local fallback below still marks it disbursed, so the screen will disagree with the server.${body ? ` Reason: ${body.slice(0, 300)}` : ''}`
+        )
       }
     } catch (err) {
-      console.warn('Backend disbursement attempt failed, using local fallback', err)
+      console.error(
+        `[API] Disbursement of ${reference} could not reach the server at ${BACKEND_API_BASE_URL}. ` +
+          `No authorization check was performed; the local fallback below marks it disbursed regardless.`,
+        err
+      )
     }
   }
 
