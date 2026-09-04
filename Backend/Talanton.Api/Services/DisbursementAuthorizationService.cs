@@ -27,7 +27,7 @@ public class DisbursementAuthorizationService
     /// <returns>DisbursementAuthorizationResult with allow/deny status and reason</returns>
     public static DisbursementAuthorizationResult EvaluateDisbursementAuthority(
         decimal principalAmount,
-        string requestorRole,
+        string? requestorRole,
         bool chairpersonApprovalPresent = false,
         bool secretaryApprovalPresent = false)
     {
@@ -45,7 +45,7 @@ public class DisbursementAuthorizationService
                              $"Chairperson: {(chairpersonApprovalPresent ? "✓" : "✗")}, Secretary: {(secretaryApprovalPresent ? "✓" : "✗")}",
                     IsBigLoan = true,
                     RequiredRole = "Chairperson + Secretary",
-                    RequestorRole = requestorRole,
+                    RequestorRole = requestorRole ?? string.Empty,
                     DisbursementType = DisbursementType.DualSignatureBigLoan
                 };
             }
@@ -63,7 +63,7 @@ public class DisbursementAuthorizationService
                              $"Current user role: {requestorRole}",
                     IsBigLoan = true,
                     RequiredRole = "Chairperson + Secretary",
-                    RequestorRole = requestorRole,
+                    RequestorRole = requestorRole ?? string.Empty,
                     DisbursementType = DisbursementType.DualSignatureBigLoan
                 };
             }
@@ -74,13 +74,16 @@ public class DisbursementAuthorizationService
                 Reason = "Big loan disbursement authorized by Chairperson and Secretary signatures.",
                 IsBigLoan = true,
                 RequiredRole = "Chairperson + Secretary",
-                RequestorRole = requestorRole,
+                RequestorRole = requestorRole ?? string.Empty,
                 DisbursementType = DisbursementType.DualSignatureBigLoan
             };
         }
 
-        // Small loans require only Treasurer
-        if (!requestorRole?.Equals(ROLE_TREASURER, StringComparison.OrdinalIgnoreCase) == true)
+        // Small loans require only Treasurer.
+        // Written as a plain comparison: `!requestorRole?.Equals(...) == true` lifts to bool?, and
+        // a null role made that expression null rather than true — so a request carrying no role
+        // at all skipped the deny branch and was authorized.
+        if (!string.Equals(requestorRole, ROLE_TREASURER, StringComparison.OrdinalIgnoreCase))
         {
             return new DisbursementAuthorizationResult
             {
@@ -88,7 +91,7 @@ public class DisbursementAuthorizationService
                 Reason = $"Small loan disbursement requires Treasurer authorization only. Current user role: {requestorRole}",
                 IsBigLoan = false,
                 RequiredRole = ROLE_TREASURER,
-                RequestorRole = requestorRole,
+                RequestorRole = requestorRole ?? string.Empty,
                 DisbursementType = DisbursementType.TreasurerSmallLoan
             };
         }
@@ -99,7 +102,7 @@ public class DisbursementAuthorizationService
             Reason = "Small loan disbursement authorized by Treasurer.",
             IsBigLoan = false,
             RequiredRole = ROLE_TREASURER,
-            RequestorRole = requestorRole,
+            RequestorRole = requestorRole ?? string.Empty,
             DisbursementType = DisbursementType.TreasurerSmallLoan
         };
     }

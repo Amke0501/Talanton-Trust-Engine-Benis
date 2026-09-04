@@ -233,6 +233,37 @@ export async function createLoanApplication(
     ],
   }
 
+  // Register the application with the API and adopt the reference it assigns. Without this the
+  // server has never heard of the file, so every later call (underwrite, route, disburse) 404s —
+  // which used to be hidden by those calls failing open, and now correctly blocks them instead.
+  if (!payload.isDraft) {
+    const created = await requestBackend<{ reference?: string; id?: string }>('/api/loanapplications', {
+      method: 'POST',
+      body: JSON.stringify({
+        applicantName: payload.applicantName,
+        memberId: payload.memberId,
+        applicantType: payload.applicantType,
+        principal: payload.principal,
+        purpose: payload.purpose,
+        tenureMonths: payload.tenureMonths,
+        savingsBalance: payload.savingsBalance,
+        monthlyIncome: payload.monthlyIncome,
+        monthlyDebt: payload.monthlyDebt,
+        multiplier: payload.multiplier,
+      }),
+    })
+
+    if (created?.reference) {
+      newApp.reference = created.reference
+      if (created.id) newApp.id = created.id
+    } else {
+      console.error(
+        `[API] The application was not registered with the server, so it exists only in this browser. ` +
+          `It cannot be underwritten, routed to committee or disbursed until creation succeeds.`
+      )
+    }
+  }
+
   const sb = getSupabase()
   if (sb) {
     try {
@@ -512,8 +543,19 @@ export async function signAndRouteToCommittee(
     method: 'POST',
   })
 
-  if (updatedFromBackend?.counterOfferStatus === 'PENDING') return false
-  if (updatedFromBackend?.status === 'declined') return false
+  // Fail closed. Previously an unreachable server left updatedFromBackend undefined and the file
+  // was moved to committee regardless of verdict — the exact path a declined file used to slip
+  // through, since locally created references are unknown to the server and always 404.
+  if (!updatedFromBackend) {
+    console.error(
+      `[API] Routing ${reference} to committee was not confirmed by the server ` +
+        `(${getLastBackendFailure() ?? 'no response'}). The file has NOT been routed.`
+    )
+    return false
+  }
+  if (updatedFromBackend.counterOfferStatus === 'PENDING') return false
+  if (updatedFromBackend.status === 'declined') return false
+  if (payload.verdict === 'DECLINED') return false
 
   memoryApplications = memoryApplications.map((app) => {
     if (app.reference === reference) {
@@ -615,60 +657,76 @@ export async function checkQuorumStatus(reference: string): Promise<QuorumCheckR
   }
 }
 
-export async function disburseLoan(reference: string, requestorRole: string = 'Treasurer'): Promise<boolean> {
+export type DisbursementOutcome = { ok: boolean; reason: string }
+
+/**
+ * Releases funds for a loan. The server is the authority: it re-checks quorum and then who is
+ * allowed to release (Treasurer for small loans, Chairperson + Secretary for big ones).
+ *
+ * This fails CLOSED. Previously the backend call was skipped unless Supabase happened to be
+ * configured, its response was only logged, and the local state was marked disbursed either way —
+ * so a refusal and a success looked identical on screen. Releasing money without a completed
+ * authorization check is the specific gap this is meant to close, so an unreachable server is
+ * treated as a refusal, not as permission.
+ */
+export async function disburseLoan(
+  reference: string,
+  requestorRole: string = 'Treasurer'
+): Promise<DisbursementOutcome> {
   const now = new Date().toISOString()
 
-  // Try to call backend API with authorization
-  const sb = getSupabase()
-  if (sb) {
-    try {
-      const response = await fetch(`${BACKEND_API_BASE_URL}/api/loanapplications/${reference}/disburse`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          requestorRole,
-          chairpersonSignature: 'OTP_VERIFIED', // Simulated for demo
-          secretarySignature: 'OTP_VERIFIED',   // Simulated for demo
-          disbursementNotes: 'Authorized by committee board',
-        }),
-      })
-
-      if (!response.ok) {
-        const body = await response.text().catch(() => '')
-        console.error(
-          `[API] Disbursement of ${reference} was REFUSED by the server (${response.status} ${response.statusText}). ` +
-            `The local fallback below still marks it disbursed, so the screen will disagree with the server.${body ? ` Reason: ${body.slice(0, 300)}` : ''}`
-        )
-      }
-    } catch (err) {
-      console.error(
-        `[API] Disbursement of ${reference} could not reach the server at ${BACKEND_API_BASE_URL}. ` +
-          `No authorization check was performed; the local fallback below marks it disbursed regardless.`,
-        err
-      )
+  let response: Response
+  try {
+    response = await fetch(`${BACKEND_API_BASE_URL}/api/loanapplications/${reference}/disburse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        requestorRole,
+        chairpersonSignature: 'OTP_VERIFIED', // Simulated until real dual-signature capture exists
+        secretarySignature: 'OTP_VERIFIED',   // Simulated until real dual-signature capture exists
+        disbursementNotes: `Released by ${requestorRole}`,
+      }),
+    })
+  } catch (err) {
+    console.error(`[API] Disbursement of ${reference} could not reach ${BACKEND_API_BASE_URL}.`, err)
+    return {
+      ok: false,
+      reason:
+        'Could not reach the server, so no authorization check was performed. Funds have not been released.',
     }
   }
 
-  // Local fallback: update memory state
-  memoryApplications = memoryApplications.map((app) => {
-    if (app.reference === reference) {
-      return {
-        ...app,
-        stage: 'disbursed',
-        status: 'disbursed',
-        disbursedAt: now,
-        statusNote: `Funds released and credited on ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}. Active repayment underway.`,
-      }
+  if (!response.ok) {
+    let reason = `The server refused this release (${response.status} ${response.statusText}).`
+    try {
+      const body = await response.json()
+      if (body?.reason) reason = body.reason
+    } catch {
+      /* keep the status-based message */
     }
-    return app
-  })
+    console.error(`[API] Disbursement of ${reference} refused: ${reason}`)
+    return { ok: false, reason }
+  }
+
+  // Authorized and executed on the server — reflect it locally.
+  memoryApplications = memoryApplications.map((app) =>
+    app.reference === reference
+      ? {
+          ...app,
+          stage: 'disbursed',
+          status: 'disbursed',
+          disbursedAt: now,
+          statusNote: `Funds released and credited on ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}. Active repayment underway.`,
+        }
+      : app
+  )
 
   memoryPortfolio = memoryPortfolio.map((l) =>
     l.reference === reference ? { ...l, status: 'REPAYING', isLocked: true, disbursedAt: now } : l
   )
 
   persistLocalState()
-  return true
+  return { ok: true, reason: `Loan ${reference} released by ${requestorRole}.` }
 }
 
 // ----------------------------------------------------------------------

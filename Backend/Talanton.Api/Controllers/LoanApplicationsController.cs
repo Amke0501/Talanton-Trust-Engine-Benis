@@ -123,7 +123,14 @@ public class LoanApplicationsController : ControllerBase
 
         if (!authResult.IsAuthorized)
         {
-            return Forbid(); // 403 Forbidden
+            // Forbid() challenges the default authentication scheme; none is registered, so it
+            // cannot produce a clean 403 here. Return the status directly with the reason, so the
+            // caller can show the committee why the release was refused.
+            return StatusCode(StatusCodes.Status403Forbidden, new DisbursementAuthorizationResponseDto
+            {
+                IsAuthorized = false,
+                Reason = authResult.Reason
+            });
         }
 
         // Step 3: Execute disbursement (route to disbursed stage)

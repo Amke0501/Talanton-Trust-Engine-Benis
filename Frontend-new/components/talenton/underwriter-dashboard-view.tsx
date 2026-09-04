@@ -148,9 +148,20 @@ export function UnderwriterDashboardView({
       fieldAuditCollateral: collateralAudit,
       appraisalOfficer: 'Agaba Collins (Risk Division)',
       securitySignature: 'OTP Signed (Verified)',
-      stage: 'committee',
-      status: 'in_review',
-      statusNote: 'Underwriting audit completed and digitally signed. Awaiting Committee Board Quorum vote.',
+      // stage/status are deliberately NOT set here. They used to be applied before the
+      // !overallPassed guard below, which moved a declined file to the committee stage.
+      ...(overallPassed
+        ? {
+            stage: 'committee' as const,
+            status: 'in_review' as const,
+            statusNote: 'Underwriting audit completed and digitally signed. Awaiting Committee Board Quorum vote.',
+          }
+        : {
+            stage: 'underwriting' as const,
+            status: 'declined' as const,
+            statusNote:
+              'File failed underwriting guardrail checks. It terminates at the underwriting desk and does not proceed to committee.',
+          }),
     }
     const underwritingResult = await updateUnderwritingOverride(application.reference, {
       applicantType: classification,

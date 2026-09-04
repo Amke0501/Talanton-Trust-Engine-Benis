@@ -50,6 +50,10 @@ export function CommitteeDashboardView({
   const [portfolioLoans, setPortfolioLoans] = useState<PortfolioLoan[]>(SEED_PORTFOLIO_LOANS)
   const [portfolioFilter, setPortfolioFilter] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'ACTIVE' | 'COMPLETED' | 'REJECTED'>('ALL')
   const [isDisbursing, setIsDisbursing] = useState(false)
+  // Who is acting. Committee members do not yet have individual logins, so the release role is
+  // chosen here — without it there is no way to exercise "the wrong person tries to disburse".
+  const [actingRole, setActingRole] = useState('Treasurer')
+  const [disburseError, setDisburseError] = useState<string | null>(null)
   const [disbursedSuccess, setDisbursedSuccess] = useState(application.stage === 'disbursed')
 
   // ========== NEW: QUORUM LOGIC BASED ON LOAN SIZE ==========
@@ -108,8 +112,15 @@ export function CommitteeDashboardView({
 
   async function handleDisburseFunds() {
     setIsDisbursing(true)
-    await disburseLoan(application.reference)
+    setDisburseError(null)
+    const outcome = await disburseLoan(application.reference, actingRole)
     setIsDisbursing(false)
+
+    if (!outcome.ok) {
+      setDisburseError(outcome.reason)
+      return
+    }
+
     setDisbursedSuccess(true)
     
     // Update local portfolio
@@ -354,6 +365,21 @@ export function CommitteeDashboardView({
                   </span>
 
                   {isQuorumPassed && !disbursedSuccess && (
+                    <label className="flex items-center gap-2 text-[0.7rem] font-semibold text-white/80">
+                      Acting as
+                      <select
+                        value={actingRole}
+                        onChange={(e) => { setActingRole(e.target.value); setDisburseError(null) }}
+                        className="rounded-lg bg-white/10 border border-white/25 px-2 py-1.5 text-[0.7rem] font-bold text-white cursor-pointer"
+                      >
+                        {['Treasurer', 'Chairperson', 'Secretary', 'Credit Officer', 'Board Member'].map((r) => (
+                          <option key={r} value={r} className="text-[#0d2a1c]">{r}</option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+
+                  {isQuorumPassed && !disbursedSuccess && (
                     <button
                       type="button"
                       onClick={handleDisburseFunds}
@@ -375,6 +401,15 @@ export function CommitteeDashboardView({
                   )}
                 </div>
               </div>
+
+              {disburseError && (
+                <div role="alert" className="mt-3 rounded-xl border border-rose-400/50 bg-rose-950/60 px-4 py-3">
+                  <p className="text-[0.7rem] font-bold uppercase tracking-widest text-rose-300">
+                    Release blocked
+                  </p>
+                  <p className="mt-1 text-xs text-rose-100">{disburseError}</p>
+                </div>
+              )}
             </CardBody>
           </Card>
         </div>

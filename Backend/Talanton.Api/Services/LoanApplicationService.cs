@@ -173,7 +173,9 @@ public class LoanApplicationService : ILoanApplicationService
             MemberId = "SME-1189",
             ApplicantType = "cooperative",
             Status = "declined",
-            Stage = "committee",
+            // Declined files terminate at the underwriting desk. This row previously shipped with
+            // Stage = "committee", putting a declined file in the committee queue out of the box.
+            Stage = "underwriting",
             Principal = 55000000m,
             Purpose = "Fleet vehicle acquisition",
             TenureMonths = 36,

@@ -27,6 +27,11 @@ export function CommitteeLoansList({
   const [searchQuery, setSearchQuery] = useState('')
 
   const filteredApps = applications.filter((app) => {
+    // A file declined at underwriting terminates there. The default "All" tab applied no verdict
+    // filter, so declined files were listed in the committee queue alongside live ones.
+    const isDeclined = app.verdict === 'DECLINED' || app.status === 'declined'
+    if (isDeclined && app.stage !== 'disbursed') return false
+
     // Filter status
     if (filter === 'PENDING') {
       if (app.stage !== 'committee' && !(app.stage === 'underwriting' && app.verdict === 'APPROVED')) return false
