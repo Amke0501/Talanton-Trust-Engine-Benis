@@ -26,6 +26,8 @@ import {
 import { Card, CardBody } from '@/components/talenton/primitives'
 import { disburseLoan } from '@/lib/api-service'
 import { readSeatFromCookie, type CommitteeSeat } from '@/lib/role-access'
+import { LiquidityIndicator } from '@/components/talenton/liquidity-indicator'
+import { GuarantorCoveragePanel } from '@/components/talenton/guarantor-coverage-panel'
 
 export function CommitteeDashboardView({
   application,
@@ -349,6 +351,17 @@ export function CommitteeDashboardView({
                     </div>
                   )
                 })}
+              </div>
+
+              {/* Cash position and guarantor coverage — both were server-side only until now */}
+              <div className="grid gap-4 md:grid-cols-2 mb-5">
+                <LiquidityIndicator />
+                <div className="rounded-2xl border border-gray-200 bg-white p-4">
+                  <p className="text-[0.65rem] font-bold uppercase tracking-widest text-gray-500 mb-3">
+                    Guarantor coverage
+                  </p>
+                  <GuarantorCoveragePanel reference={application.reference} />
+                </div>
               </div>
 
               {/* Committee Quorum Outcome Tracker & Disburse Button */}

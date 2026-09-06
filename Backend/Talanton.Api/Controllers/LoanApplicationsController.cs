@@ -9,10 +9,12 @@ namespace Talanton.Api.Controllers;
 public class LoanApplicationsController : ControllerBase
 {
     private readonly ILoanApplicationService _loanService;
+    private readonly Services.LiquidityService _liquidity;
 
-    public LoanApplicationsController(ILoanApplicationService loanService)
+    public LoanApplicationsController(ILoanApplicationService loanService, Services.LiquidityService liquidity)
     {
         _loanService = loanService;
+        _liquidity = liquidity;
     }
 
     [HttpGet]
@@ -120,6 +122,21 @@ public class LoanApplicationsController : ControllerBase
             !string.IsNullOrEmpty(authDto.ChairpersonSignature),
             !string.IsNullOrEmpty(authDto.SecretarySignature)
         );
+
+        // Step 2b: the SACCO must still be holding enough cash. Authority to release is not the
+        // same as having the money; releasing into an over-extended position is what this stops.
+        var liquidity = await _liquidity.GetStatusForGateAsync(cancellationToken);
+        if (liquidity.IsLocked)
+        {
+            return StatusCode(StatusCodes.Status409Conflict, new DisbursementAuthorizationResponseDto
+            {
+                IsAuthorized = false,
+                Reason = $"Disbursement is on hold: liquidity ratio is {liquidity.CurrentLiquidityRatio:0.00}, " +
+                         $"below the {Services.LiquidityService.MinimumSafeRatio:0.00} minimum. " +
+                         $"Cash on hand {liquidity.TotalLiquidCash:N0} against {liquidity.TotalPendingLoans:N0} committed; " +
+                         $"shortfall {liquidity.Deficit:N0}."
+            });
+        }
 
         if (!authResult.IsAuthorized)
         {

@@ -730,6 +730,50 @@ export async function disburseLoan(
 }
 
 // ----------------------------------------------------------------------
+// 4b. GUARANTOR COVERAGE & LIQUIDITY
+// ----------------------------------------------------------------------
+
+export interface GuarantorCoverage {
+  isCovered: boolean
+  loanGap: number
+  totalPledgedShares: number
+  totalAvailableShares: number
+  deficit: number
+  reason: string
+  guarantors: {
+    id: string
+    name: string
+    memberId: string
+    pledgedShares: number
+    availableShares: number
+    isCapacitySufficient: boolean
+  }[]
+}
+
+/** How much of the uncollateralised gap the guarantors actually cover, per the server's rules. */
+export async function fetchGuarantorCoverage(reference: string): Promise<GuarantorCoverage | undefined> {
+  return requestBackend<GuarantorCoverage>(
+    `/api/loanapplications/${encodeURIComponent(reference)}/guarantor-coverage`,
+    { method: 'GET' }
+  )
+}
+
+export interface LiquidityStatus {
+  totalLiquidCash: number
+  totalPendingLoans: number
+  currentLiquidityRatio: number
+  isLocked: boolean
+  deficit: number
+  maxSafeDisbursementCap: number
+  minimumSafeRatio: number
+}
+
+/** Cash on hand against the principal already committed to files awaiting release. */
+export async function fetchLiquidityStatus(): Promise<LiquidityStatus | undefined> {
+  return requestBackend<LiquidityStatus>('/api/liquidity/status', { method: 'GET' })
+}
+
+// ----------------------------------------------------------------------
 // 5. CREDIT PASSPORT REGISTRY
 // ----------------------------------------------------------------------
 

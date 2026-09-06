@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using Talanton.Api.Data;
+using Talanton.Api.Services;
 
 namespace Talanton.Api.Controllers;
 
@@ -8,45 +7,27 @@ namespace Talanton.Api.Controllers;
 [Route("api/[controller]")]
 public class LiquidityController : ControllerBase
 {
-    private readonly ApplicationDbContext _context;
+    private readonly LiquidityService _liquidity;
 
-    public LiquidityController(ApplicationDbContext context)
+    public LiquidityController(LiquidityService liquidity)
     {
-        _context = context;
+        _liquidity = liquidity;
     }
 
     [HttpGet("status")]
     public async Task<IActionResult> GetLiquidityStatus(CancellationToken cancellationToken)
     {
-        var liquidAccounts = await _context.LedgerAccounts
-            .Where(a => a.AccountType == "Cash_Vault" || a.AccountType == "Bank_Current" || a.AccountType == "Mobile_Money_Float")
-            .ToListAsync(cancellationToken);
-
-        decimal totalLiquidCash = liquidAccounts.Sum(a => a.CurrentBalance);
-
-        // Sum requested principal amount of all loan applications that are in the committee's active review bucket.
-        // Active reviews are CurrentStage = "committee" and CurrentStatus = "in_review"
-        var pendingLoans = await _context.LoanApplications
-            .Where(la => la.CurrentStage == "committee" && la.CurrentStatus == "in_review")
-            .ToListAsync(cancellationToken);
-
-        decimal totalPendingLoans = pendingLoans.Sum(la => la.PrincipalAmount);
-
-        decimal currentRatio = totalPendingLoans > 0 
-            ? Math.Round(totalLiquidCash / totalPendingLoans, 2) 
-            : 99.99m; // Default high value representing infinity / no pending loans
-
-        bool isLocked = currentRatio < 2.0m;
-        decimal deficit = isLocked ? Math.Max(0, (2.0m * totalPendingLoans) - totalLiquidCash) : 0m;
+        var status = await _liquidity.GetStatusAsync(cancellationToken);
 
         return Ok(new
         {
-            totalLiquidCash,
-            totalPendingLoans,
-            currentLiquidityRatio = currentRatio,
-            isLocked,
-            deficit,
-            maxSafeDisbursementCap = Math.Round(totalLiquidCash / 2.0m, 2)
+            totalLiquidCash = status.TotalLiquidCash,
+            totalPendingLoans = status.TotalPendingLoans,
+            currentLiquidityRatio = status.CurrentLiquidityRatio,
+            isLocked = status.IsLocked,
+            deficit = status.Deficit,
+            maxSafeDisbursementCap = status.MaxSafeDisbursementCap,
+            minimumSafeRatio = LiquidityService.MinimumSafeRatio
         });
     }
 }
