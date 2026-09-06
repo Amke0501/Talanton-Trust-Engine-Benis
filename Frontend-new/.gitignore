@@ -2,3 +2,6 @@
 .next/
 node_modules/
 .vercel
+
+# TypeScript incremental build cache — regenerated on every build
+*.tsbuildinfo
