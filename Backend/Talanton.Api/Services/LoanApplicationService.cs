@@ -9,10 +9,12 @@ namespace Talanton.Api.Services;
 public class LoanApplicationService : ILoanApplicationService
 {
     private readonly ApplicationDbContext _context;
+    private readonly AuditService _audit;
 
-    public LoanApplicationService(ApplicationDbContext context)
+    public LoanApplicationService(ApplicationDbContext context, AuditService audit)
     {
         _context = context;
+        _audit = audit;
     }
     private static readonly List<LoanApplicationDto> Applications = new()
     {
@@ -542,6 +544,10 @@ public class LoanApplicationService : ILoanApplicationService
             app.Status = "counter_offer_pending";
             app.StatusNote = $"Revised offer sent to applicant: principal reduced from {originalPrincipal:C} to {dto.RequestedPrincipal:C} and tenure changed from {originalTenure} to {dto.TenureMonths} months. Applicant consent is required before the file can move to committee.";
             await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
+            await _audit.RecordAsync(AuditActions.CounterOfferMade, "LoanApplication", app.Reference,
+                before: $"principal {originalPrincipal:N0} over {originalTenure} months",
+                after: $"principal {dto.RequestedPrincipal:N0} over {dto.TenureMonths} months",
+                cancellationToken: cancellationToken);
             return app;
         }
 
@@ -551,6 +557,9 @@ public class LoanApplicationService : ILoanApplicationService
             : $"File {reference} is declined. BOSA multiplier breach or Payslip take-home deficit.";
 
         await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
+        await _audit.RecordAsync(AuditActions.UnderwritingDecided, "LoanApplication", app.Reference,
+            after: $"Verdict {app.Verdict}; principal {app.Principal:N0} over {app.TenureMonths} months",
+            cancellationToken: cancellationToken);
         return app;
     }
 
@@ -590,6 +599,9 @@ public class LoanApplicationService : ILoanApplicationService
             app.Verdict = "APPROVED";
             app.StatusNote = "Applicant accepted the revised offer. Consent has been recorded and the file can proceed to committee review.";
             await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
+            await _audit.RecordAsync(AuditActions.CounterOfferAnswered, "LoanApplication", app.Reference,
+                after: $"Applicant ACCEPTED: principal {app.Principal:N0} over {app.TenureMonths} months",
+                cancellationToken: cancellationToken);
             return app;
         }
 
@@ -601,6 +613,9 @@ public class LoanApplicationService : ILoanApplicationService
         app.Verdict = "DECLINED";
         app.StatusNote = "Applicant declined the revised offer. The file cannot proceed without a new underwriting decision.";
         await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
+        await _audit.RecordAsync(AuditActions.CounterOfferAnswered, "LoanApplication", app.Reference,
+            after: "Applicant DECLINED the revised offer",
+            cancellationToken: cancellationToken);
         return app;
     }
 
@@ -702,6 +717,10 @@ public class LoanApplicationService : ILoanApplicationService
             .FirstOrDefaultAsync(a => a.ApplicationNumber == app.Reference, cancellationToken);
 
         await PersistVoteAsync(entity, voteDto, cancellationToken);
+        await _audit.RecordAsync(AuditActions.VoteCast, "LoanApplication", app.Reference,
+            actorName: voteDto.MemberRole,
+            after: $"{voteDto.MemberRole} voted {voteDto.Vote}",
+            cancellationToken: cancellationToken);
         return app;
     }
 
@@ -822,6 +841,9 @@ public class LoanApplicationService : ILoanApplicationService
             app.Status = "in_review";
             app.StatusNote = $"File {reference} routed to Committee Board for authorization.";
             await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
+            await _audit.RecordAsync(AuditActions.StageRouted, "LoanApplication", app.Reference,
+                after: "Routed to committee for authorization",
+                cancellationToken: cancellationToken);
             return app;
         }
 
@@ -849,6 +871,10 @@ public class LoanApplicationService : ILoanApplicationService
             app.Status = "disbursed";
             app.StatusNote = $"File {reference} approved by committee and funds released. Loan is now active and in repayment.";
             await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
+            await _audit.RecordAsync(AuditActions.FundsReleased, "LoanApplication", app.Reference,
+                after: $"Released {app.Principal:N0} over {app.TenureMonths} months; " +
+                       $"quorum {quorumResult.ApprovalCount}/{quorumResult.RequiredApprovals}",
+                cancellationToken: cancellationToken);
             return app;
         }
 

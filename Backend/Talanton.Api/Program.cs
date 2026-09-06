@@ -69,6 +69,7 @@ builder.Services.AddScoped<IApplicantRepository, ApplicantRepository>();
 builder.Services.AddScoped<IApplicantService, ApplicantService>();
 builder.Services.AddScoped<ILoanApplicationService, LoanApplicationService>();
 builder.Services.AddScoped<LiquidityService>();
+builder.Services.AddScoped<AuditService>();
 
 var app = builder.Build();
 

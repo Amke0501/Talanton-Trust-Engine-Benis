@@ -10,11 +10,16 @@ public class LoanApplicationsController : ControllerBase
 {
     private readonly ILoanApplicationService _loanService;
     private readonly Services.LiquidityService _liquidity;
+    private readonly Services.AuditService _audit;
 
-    public LoanApplicationsController(ILoanApplicationService loanService, Services.LiquidityService liquidity)
+    public LoanApplicationsController(
+        ILoanApplicationService loanService,
+        Services.LiquidityService liquidity,
+        Services.AuditService audit)
     {
         _loanService = loanService;
         _liquidity = liquidity;
+        _audit = audit;
     }
 
     [HttpGet]
@@ -108,6 +113,11 @@ public class LoanApplicationsController : ControllerBase
         var quorumResult = Services.QuorumEvaluationService.EvaluateQuorum(app.CommitteeVotes, app.Principal);
         if (!quorumResult.IsQuorumPassed)
         {
+            await _audit.RecordAsync(Services.AuditActions.ReleaseRefused, "LoanApplication", reference,
+                actorName: authDto.RequestorRole,
+                after: $"Refused — quorum not met. {quorumResult.Reason}",
+                cancellationToken: cancellationToken);
+
             return BadRequest(new DisbursementAuthorizationResponseDto
             {
                 IsAuthorized = false,
@@ -128,6 +138,11 @@ public class LoanApplicationsController : ControllerBase
         var liquidity = await _liquidity.GetStatusForGateAsync(cancellationToken);
         if (liquidity.IsLocked)
         {
+            await _audit.RecordAsync(Services.AuditActions.ReleaseRefused, "LoanApplication", reference,
+                actorName: authDto.RequestorRole,
+                after: $"Refused — liquidity ratio {liquidity.CurrentLiquidityRatio:0.00} below minimum",
+                cancellationToken: cancellationToken);
+
             return StatusCode(StatusCodes.Status409Conflict, new DisbursementAuthorizationResponseDto
             {
                 IsAuthorized = false,
@@ -143,6 +158,11 @@ public class LoanApplicationsController : ControllerBase
             // Forbid() challenges the default authentication scheme; none is registered, so it
             // cannot produce a clean 403 here. Return the status directly with the reason, so the
             // caller can show the committee why the release was refused.
+            await _audit.RecordAsync(Services.AuditActions.ReleaseRefused, "LoanApplication", reference,
+                actorName: authDto.RequestorRole,
+                after: $"Refused — {authResult.Reason}",
+                cancellationToken: cancellationToken);
+
             return StatusCode(StatusCodes.Status403Forbidden, new DisbursementAuthorizationResponseDto
             {
                 IsAuthorized = false,
