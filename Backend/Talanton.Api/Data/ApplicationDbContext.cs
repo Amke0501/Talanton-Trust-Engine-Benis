@@ -55,6 +55,9 @@ public class ApplicationDbContext : DbContext
     // Ledger accounts
     public DbSet<LedgerAccount> LedgerAccounts { get; set; }
 
+    // Guarantor pledges and share locks
+    public DbSet<ApplicationGuarantor> ApplicationGuarantors { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -109,5 +112,18 @@ public class ApplicationDbContext : DbContext
             .WithOne(a => a.CooperativeProfile)
             .HasForeignKey<ApplicantCooperativeProfile>(p => p.ApplicantId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        // Guarantors belong to one application and go with it.
+        modelBuilder.Entity<ApplicationGuarantor>()
+            .HasOne(g => g.LoanApplication)
+            .WithMany()
+            .HasForeignKey(g => g.LoanApplicationId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // One pledge per member per application: a second pledge replaces the first rather than
+        // silently stacking, which is what let the same shares be counted twice.
+        modelBuilder.Entity<ApplicationGuarantor>()
+            .HasIndex(g => new { g.LoanApplicationId, g.MemberId })
+            .IsUnique();
     }
 }

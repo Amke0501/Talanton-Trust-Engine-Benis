@@ -294,12 +294,14 @@ public class LoanApplicationService : ILoanApplicationService
                 var existingInMemory = Applications.FirstOrDefault(a => a.Id == app.Id || a.Reference.Equals(app.ApplicationNumber, StringComparison.OrdinalIgnoreCase));
                 if (existingInMemory != null)
                 {
-                    resultList.Add(OverlayPersistedWorkflow(existingInMemory, app));
+                    var overlaid = OverlayPersistedWorkflow(existingInMemory, app);
+                    await HydrateFromDatabaseAsync(overlaid, app.Id, cancellationToken);
+                    resultList.Add(overlaid);
                 }
                 else
                 {
                     var isSubmitted = app.CurrentStatus.Equals("SUBMITTED", StringComparison.OrdinalIgnoreCase) || app.CurrentStatus.Equals("submitted", StringComparison.OrdinalIgnoreCase);
-                    resultList.Add(new LoanApplicationDto
+                    var dto = new LoanApplicationDto
                     {
                         Id = app.Id,
                         Reference = app.ApplicationNumber,
@@ -326,7 +328,10 @@ public class LoanApplicationService : ILoanApplicationService
                         CounterOfferStatus = string.IsNullOrWhiteSpace(app.CounterOfferStatus) ? "NONE" : app.CounterOfferStatus,
                         ApplicantConsentAt = app.ApplicantConsentAt,
                         ApplicantConsentReceived = app.ApplicantConsentReceived
-                    });
+                    };
+
+                    await HydrateFromDatabaseAsync(dto, app.Id, cancellationToken);
+                    resultList.Add(dto);
                 }
             }
         }
@@ -599,26 +604,84 @@ public class LoanApplicationService : ILoanApplicationService
         return app;
     }
 
-    public Task<LoanApplicationDto?> AddGuarantorAsync(string reference, GuarantorDto guarantor, CancellationToken cancellationToken = default)
+    public async Task<LoanApplicationDto?> AddGuarantorAsync(string reference, GuarantorDto guarantor, CancellationToken cancellationToken = default)
     {
-        var app = Applications.FirstOrDefault(a => a.Reference.Equals(reference, StringComparison.OrdinalIgnoreCase));
-        if (app == null) return Task.FromResult<LoanApplicationDto?>(null);
+        // Resolve through the merged view rather than the in-memory list alone: applications
+        // created through the API exist only in the database, and used to be unreachable here.
+        var app = await GetLoanApplicationByRefAsync(reference, cancellationToken);
+        if (app == null) return null;
 
-        guarantor.Id = Guid.NewGuid().ToString("N");
-        app.Guarantors.Add(guarantor);
+        var entity = await _context.LoanApplications
+            .FirstOrDefaultAsync(a => a.ApplicationNumber == app.Reference, cancellationToken);
 
-        // Recalculate guarantor cover
+        var existing = app.Guarantors.FirstOrDefault(
+            g => g.MemberId.Equals(guarantor.MemberId, StringComparison.OrdinalIgnoreCase));
+
+        if (existing != null)
+        {
+            // Re-pledging replaces the previous figure. Adding a second row for the same member
+            // double-counted their shares toward coverage.
+            existing.Name = guarantor.Name;
+            existing.PledgedShares = guarantor.PledgedShares;
+            existing.AvailableShares = guarantor.AvailableShares;
+            guarantor = existing;
+        }
+        else
+        {
+            guarantor.Id = Guid.NewGuid().ToString("N");
+            app.Guarantors.Add(guarantor);
+        }
+
         var totalPledged = app.Guarantors.Sum(g => g.PledgedShares);
         var uncollateralized = Math.Max(0, app.Principal - app.SavingsBalance);
         app.GuardrailGuarantorPassed = totalPledged >= uncollateralized;
 
-        return Task.FromResult<LoanApplicationDto?>(app);
+        await PersistGuarantorAsync(entity, guarantor, cancellationToken);
+        return app;
     }
 
-    public Task<LoanApplicationDto?> CastVoteAsync(string reference, CastCommitteeVoteDto voteDto, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Writes one guarantor pledge through to the database, keyed on application + member so a
+    /// re-pledge updates in place. No-ops for the hard-coded demo files, which have no row.
+    /// </summary>
+    private async Task PersistGuarantorAsync(LoanApplication? entity, GuarantorDto guarantor, CancellationToken cancellationToken)
     {
-        var app = Applications.FirstOrDefault(a => a.Reference.Equals(reference, StringComparison.OrdinalIgnoreCase));
-        if (app == null) return Task.FromResult<LoanApplicationDto?>(null);
+        if (entity is null) return;
+
+        try
+        {
+            var row = await _context.ApplicationGuarantors.FirstOrDefaultAsync(
+                g => g.LoanApplicationId == entity.Id && g.MemberId == guarantor.MemberId,
+                cancellationToken);
+
+            if (row is null)
+            {
+                row = new ApplicationGuarantor
+                {
+                    Id = Guid.NewGuid(),
+                    LoanApplicationId = entity.Id,
+                    MemberId = guarantor.MemberId,
+                };
+                _context.ApplicationGuarantors.Add(row);
+            }
+
+            row.Name = guarantor.Name;
+            row.PledgedShares = guarantor.PledgedShares;
+            row.AvailableShares = guarantor.AvailableShares;
+
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ERROR] Could not save guarantor {guarantor.MemberId} for {entity.ApplicationNumber} " +
+                              $"({ex.GetType().Name}): {ex.Message}. The pledge exists in memory only and will be lost on restart.");
+        }
+    }
+
+    public async Task<LoanApplicationDto?> CastVoteAsync(string reference, CastCommitteeVoteDto voteDto, CancellationToken cancellationToken = default)
+    {
+        var app = await GetLoanApplicationByRefAsync(reference, cancellationToken);
+        if (app == null) return null;
 
         var existing = app.CommitteeVotes.FirstOrDefault(v => v.MemberRole.Equals(voteDto.MemberRole, StringComparison.OrdinalIgnoreCase));
         if (existing != null)
@@ -635,7 +698,79 @@ public class LoanApplicationService : ILoanApplicationService
             });
         }
 
-        return Task.FromResult<LoanApplicationDto?>(app);
+        var entity = await _context.LoanApplications
+            .FirstOrDefaultAsync(a => a.ApplicationNumber == app.Reference, cancellationToken);
+
+        await PersistVoteAsync(entity, voteDto, cancellationToken);
+        return app;
+    }
+
+    /// <summary>
+    /// Writes a committee vote through to the database. Votes were previously held only in a
+    /// static list, so a restart erased the board's decisions and left no record of who decided
+    /// what — the audit trail the founder asked for has nothing to draw on without this.
+    ///
+    /// A seat maps to the seeded user of the same name; the vote hangs off the application's
+    /// CommitteeReview, which is created on first vote.
+    /// </summary>
+    private async Task PersistVoteAsync(LoanApplication? entity, CastCommitteeVoteDto voteDto, CancellationToken cancellationToken)
+    {
+        if (entity is null) return;
+
+        try
+        {
+            var voter = await _context.Users.FirstOrDefaultAsync(
+                u => u.FullName.ToLower() == voteDto.MemberRole.ToLower(), cancellationToken);
+
+            if (voter is null)
+            {
+                Console.WriteLine($"[ERROR] No user account holds the seat '{voteDto.MemberRole}', so the vote on " +
+                                  $"{entity.ApplicationNumber} was not recorded. Seed accounts may be missing.");
+                return;
+            }
+
+            var review = await _context.CommitteeReviews
+                .FirstOrDefaultAsync(r => r.LoanApplicationId == entity.Id, cancellationToken);
+
+            if (review is null)
+            {
+                review = new CommitteeReview
+                {
+                    Id = Guid.NewGuid(),
+                    LoanApplicationId = entity.Id,
+                    InitiatedByUserId = voter.Id,
+                    ReviewStatus = "Open",
+                    QuorumRequired = QuorumEvaluationService.GetRequiredApprovals(entity.PrincipalAmount),
+                };
+                _context.CommitteeReviews.Add(review);
+                await _context.SaveChangesAsync(cancellationToken);
+            }
+
+            var vote = await _context.CommitteeVotes.FirstOrDefaultAsync(
+                v => v.CommitteeReviewId == review.Id && v.VoterUserId == voter.Id, cancellationToken);
+
+            if (vote is null)
+            {
+                vote = new CommitteeVote
+                {
+                    Id = Guid.NewGuid(),
+                    CommitteeReviewId = review.Id,
+                    VoterUserId = voter.Id,
+                };
+                _context.CommitteeVotes.Add(vote);
+            }
+
+            // Re-voting replaces the member's previous position rather than adding a second vote.
+            vote.Vote = voteDto.Vote;
+            vote.VotedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ERROR] Could not save the {voteDto.MemberRole} vote on {entity.ApplicationNumber} " +
+                              $"({ex.GetType().Name}): {ex.Message}. It exists in memory only and will be lost on restart.");
+        }
     }
 
     public async Task<LoanApplicationDto?> RouteStageAsync(string reference, string targetStage, CancellationToken cancellationToken = default)
@@ -701,10 +836,13 @@ public class LoanApplicationService : ILoanApplicationService
                 return app;
             }
 
-            // STEP: Lock guarantor shares when loan is disbursed
+            // STEP: Lock guarantor shares when loan is disbursed. The lock is written through to
+            // the database — held only in memory it vanished on restart, letting the same shares
+            // be pledged again to a second loan.
             if (app.Guarantors != null && app.Guarantors.Count > 0)
             {
                 app.Guarantors = GuarantorShareLockingService.LockGuarantorShares(app.Guarantors);
+                await PersistShareLocksAsync(entity, app.Guarantors, cancellationToken);
             }
 
             app.Stage = "disbursed";
@@ -722,6 +860,82 @@ public class LoanApplicationService : ILoanApplicationService
 
         await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
         return app;
+    }
+
+    /// <summary>
+    /// Records that pledged shares are now committed against a disbursed loan, so they cannot be
+    /// counted toward another application's coverage.
+    /// </summary>
+    private async Task PersistShareLocksAsync(LoanApplication? entity, List<GuarantorDto> guarantors, CancellationToken cancellationToken)
+    {
+        if (entity is null) return;
+
+        try
+        {
+            var rows = await _context.ApplicationGuarantors
+                .Where(g => g.LoanApplicationId == entity.Id)
+                .ToListAsync(cancellationToken);
+
+            var lockedAt = DateTime.UtcNow;
+            foreach (var guarantor in guarantors)
+            {
+                var row = rows.FirstOrDefault(r => r.MemberId == guarantor.MemberId);
+                if (row is null) continue;
+
+                row.LockedShares = guarantor.PledgedShares;
+                row.AvailableShares = guarantor.AvailableShares;
+                row.SharesLockedAt = lockedAt;
+                row.SharesReleasedAt = null;
+            }
+
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ERROR] Could not record guarantor share locks for {entity.ApplicationNumber} " +
+                              $"({ex.GetType().Name}): {ex.Message}. The same shares could be pledged to another loan.");
+        }
+    }
+
+    /// <summary>
+    /// Loads the persisted guarantors and committee votes for an application and copies them onto
+    /// the DTO, so a restart no longer wipes the board's decisions or the pledges behind a file.
+    /// </summary>
+    private async Task HydrateFromDatabaseAsync(LoanApplicationDto dto, Guid loanApplicationId, CancellationToken cancellationToken)
+    {
+        var guarantors = await _context.ApplicationGuarantors
+            .Where(g => g.LoanApplicationId == loanApplicationId)
+            .OrderBy(g => g.CreatedAt)
+            .ToListAsync(cancellationToken);
+
+        if (guarantors.Count > 0)
+        {
+            dto.Guarantors = guarantors.Select(g => new GuarantorDto
+            {
+                Id = g.Id.ToString("N"),
+                Name = g.Name,
+                MemberId = g.MemberId,
+                PledgedShares = g.PledgedShares,
+                AvailableShares = g.AvailableShares,
+            }).ToList();
+        }
+
+        var votes = await _context.CommitteeVotes
+            .Where(v => _context.CommitteeReviews
+                .Any(r => r.Id == v.CommitteeReviewId && r.LoanApplicationId == loanApplicationId))
+            .Join(_context.Users, v => v.VoterUserId, u => u.Id, (v, u) => new { v.Vote, u.FullName, v.VotedAt })
+            .OrderBy(x => x.VotedAt)
+            .ToListAsync(cancellationToken);
+
+        if (votes.Count > 0)
+        {
+            dto.CommitteeVotes = votes.Select(v => new CommitteeVoteDetailDto
+            {
+                MemberName = v.FullName,
+                MemberRole = v.FullName, // the seat is the account's name; see DemoUsersSeeder
+                Vote = v.Vote,
+            }).ToList();
+        }
     }
 
     private async Task PersistWorkflowFieldsAsync(LoanApplication? entity, LoanApplicationDto app, CancellationToken cancellationToken)
