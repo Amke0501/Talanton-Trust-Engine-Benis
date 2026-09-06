@@ -148,7 +148,7 @@ export function ApplicantDashboard({
                       </span>
                     </div>
                     <p className="text-xs text-gray-500 mt-0.5">
-                      Requested: <strong className="text-gray-800 font-mono">{formatUGX(draft.principal || 0)}</strong> &bull; {draft.tenureMonths || 12} Months tenure &bull; {draft.applicantType === 'individual' ? 'BOSA' : 'SME'}
+                      Requested: <strong className="text-gray-800 font-mono">{formatUGX(draft.principal || 0)}</strong> &bull; {draft.tenureMonths || 12} Months tenure &bull; {draft.applicantType === 'individual' ? 'Individual' : 'SME'}
                     </p>
                   </div>
                 </div>

@@ -97,7 +97,7 @@ public class CreditPassportMemberDto
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public string MemberId { get; set; } = string.Empty;
-    public string Classification { get; set; } = "BOSA"; // BOSA | SME
+    public string Classification { get; set; } = "Individual"; // Individual | SME
     public string Tier { get; set; } = "GOLD"; // PLATINUM | GOLD | SILVER
     public int TrustScore { get; set; }
     public int OnTimeRatePct { get; set; }

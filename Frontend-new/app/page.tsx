@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { LoginModal } from '@/components/LoginModal'
 import { VideoModal } from '@/components/VideoModal'
 import { ArrowRight, Play } from 'lucide-react'
+import { BrandMark } from '@/components/talenton/brand-mark'
 
 export default function RootPage() {
   return (
@@ -11,7 +12,7 @@ export default function RootPage() {
 
       {/* Navbar — sits on the fallback color, above the hero bg */}
       <nav className="anim-nav flex items-center justify-between px-8 py-5 w-full z-10 bg-[#eaf4e5]">
-        <div className="text-3xl font-serif font-bold text-[#103a27]">Talanton.</div>
+        <BrandMark size="lg" />
         <div className="hidden md:flex items-center gap-7 text-sm font-medium rounded-full bg-[#103a27]/6 px-7 py-2.5">
           <Link href="#" className="hover:text-[#103a27]/70">Solution</Link>
           <span className="text-[#103a27]/25">•</span>

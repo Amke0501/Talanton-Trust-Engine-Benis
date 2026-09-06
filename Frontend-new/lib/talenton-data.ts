@@ -76,7 +76,7 @@ export interface PortfolioLoan {
   reference: string
   borrowerName: string
   borrowerMeta: string
-  type: 'BOSA' | 'SME'
+  type: 'Individual' | 'SME'
   principal: number
   repaymentProgress?: string
   dueDate?: string
@@ -90,7 +90,7 @@ export interface CreditPassportMember {
   id: string
   name: string
   memberId: string
-  classification: string // BOSA | SME
+  classification: string // Individual | SME
   tier: 'PLATINUM' | 'GOLD' | 'SILVER'
   trustScore: number
   onTimeRatePct: number
@@ -160,7 +160,7 @@ export interface Application extends ApplicationDraft {
 }
 
 export const CLASSIFICATION_LABEL: Record<ApplicantType, string> = {
-  individual: 'BOSA Member (Savings Anchor)',
+  individual: 'Individual Member (Savings Anchor)',
   cooperative: 'Cooperative / SME',
 }
 
@@ -284,7 +284,7 @@ export const SEED_PORTFOLIO_LOANS: PortfolioLoan[] = [
     reference: 'LA-2026-0941A',
     borrowerName: 'Nakamya Grace (M-8842)',
     borrowerMeta: 'by Agaba Collins',
-    type: 'BOSA',
+    type: 'Individual',
     principal: 15_000_000,
     status: 'PENDING',
     actionLabel: 'Pending Vote',
@@ -301,8 +301,8 @@ export const SEED_PORTFOLIO_LOANS: PortfolioLoan[] = [
   {
     reference: 'LA-2026-0912C',
     borrowerName: 'Kato Joseph (M-1104)',
-    borrowerMeta: 'Direct BOSA Loan',
-    type: 'BOSA',
+    borrowerMeta: 'Direct Individual Loan',
+    type: 'Individual',
     principal: 8_000_000,
     repaymentProgress: '4/10 paid',
     dueDate: 'Due: Feb 05, 2026',
@@ -312,8 +312,8 @@ export const SEED_PORTFOLIO_LOANS: PortfolioLoan[] = [
   {
     reference: 'LA-2026-0899D',
     borrowerName: 'Auma Florence (M-4511)',
-    borrowerMeta: 'Direct BOSA Loan',
-    type: 'BOSA',
+    borrowerMeta: 'Direct Individual Loan',
+    type: 'Individual',
     principal: 6_500_000,
     repaymentProgress: '6/8 paid',
     dueDate: 'Due: Feb 12, 2026',
@@ -333,8 +333,8 @@ export const SEED_PORTFOLIO_LOANS: PortfolioLoan[] = [
   {
     reference: 'LA-2025-0842F',
     borrowerName: 'Namatovu Sarah (M-2309)',
-    borrowerMeta: 'Direct BOSA Loan',
-    type: 'BOSA',
+    borrowerMeta: 'Direct Individual Loan',
+    type: 'Individual',
     principal: 4_000_000,
     repaymentProgress: '6/6 paid',
     status: 'COMPLETED',
@@ -356,7 +356,7 @@ export const SEED_PASSPORT_MEMBERS: CreditPassportMember[] = [
     id: 'cp1',
     name: 'Namatovu Sarah',
     memberId: 'M-2309',
-    classification: 'BOSA',
+    classification: 'Individual',
     tier: 'PLATINUM',
     trustScore: 92,
     onTimeRatePct: 100,
@@ -382,7 +382,7 @@ export const SEED_PASSPORT_MEMBERS: CreditPassportMember[] = [
     id: 'cp3',
     name: 'Kato Joseph',
     memberId: 'M-1104',
-    classification: 'BOSA',
+    classification: 'Individual',
     tier: 'GOLD',
     trustScore: 84,
     onTimeRatePct: 95,
@@ -395,7 +395,7 @@ export const SEED_PASSPORT_MEMBERS: CreditPassportMember[] = [
     id: 'cp4',
     name: 'Auma Florence',
     memberId: 'M-4511',
-    classification: 'BOSA',
+    classification: 'Individual',
     tier: 'GOLD',
     trustScore: 76,
     onTimeRatePct: 89,
@@ -408,7 +408,7 @@ export const SEED_PASSPORT_MEMBERS: CreditPassportMember[] = [
     id: 'cp5',
     name: 'Mukasa Peter',
     memberId: 'M-9022',
-    classification: 'BOSA',
+    classification: 'Individual',
     tier: 'SILVER',
     trustScore: 71,
     onTimeRatePct: 92,

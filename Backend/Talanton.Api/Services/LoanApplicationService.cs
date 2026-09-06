@@ -35,7 +35,7 @@ public class LoanApplicationService : ILoanApplicationService
             MonthlyDebt = 500000m,
             Multiplier = 3.0m,
             SubmittedOn = "Aug 04, 2026",
-            StatusNote = "File LA-2026-0941A is declined. BOSA multiplier breach; Payslip take-home deficit.",
+            StatusNote = "File LA-2026-0941A is declined. Individual multiplier breach; Payslip take-home deficit.",
             DtiNetRatio = 82.0m,
             NetTakeHome = 450000m,
             GuardrailDepositMultiplierPassed = false,
@@ -198,7 +198,7 @@ public class LoanApplicationService : ILoanApplicationService
             Id = "cp1",
             Name = "Namatovu Sarah",
             MemberId = "M-2309",
-            Classification = "BOSA",
+            Classification = "Individual",
             Tier = "PLATINUM",
             TrustScore = 92,
             OnTimeRatePct = 100,
@@ -226,7 +226,7 @@ public class LoanApplicationService : ILoanApplicationService
             Id = "cp3",
             Name = "Kato Joseph",
             MemberId = "M-1104",
-            Classification = "BOSA",
+            Classification = "Individual",
             Tier = "GOLD",
             TrustScore = 84,
             OnTimeRatePct = 95,
@@ -240,7 +240,7 @@ public class LoanApplicationService : ILoanApplicationService
             Id = "cp4",
             Name = "Auma Florence",
             MemberId = "M-4511",
-            Classification = "BOSA",
+            Classification = "Individual",
             Tier = "GOLD",
             TrustScore = 76,
             OnTimeRatePct = 89,
@@ -254,7 +254,7 @@ public class LoanApplicationService : ILoanApplicationService
             Id = "cp5",
             Name = "Mukasa Peter",
             MemberId = "M-9022",
-            Classification = "BOSA",
+            Classification = "Individual",
             Tier = "SILVER",
             TrustScore = 71,
             OnTimeRatePct = 92,
@@ -554,7 +554,7 @@ public class LoanApplicationService : ILoanApplicationService
         app.Verdict = (app.GuardrailDepositMultiplierPassed && app.GuardrailOneThirdPayPassed) ? "APPROVED" : "DECLINED";
         app.StatusNote = app.Verdict == "APPROVED" 
             ? $"File {reference} meets all underwriting guardrail checks." 
-            : $"File {reference} is declined. BOSA multiplier breach or Payslip take-home deficit.";
+            : $"File {reference} is declined. Individual multiplier breach or Payslip take-home deficit.";
 
         await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
         await _audit.RecordAsync(AuditActions.UnderwritingDecided, "LoanApplication", app.Reference,

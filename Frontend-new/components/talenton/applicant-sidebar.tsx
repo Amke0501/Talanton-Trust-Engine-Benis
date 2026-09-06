@@ -13,6 +13,7 @@ import {
   Settings,
   LogOut,
 } from 'lucide-react'
+import { BrandMark } from '@/components/talenton/brand-mark'
 
 export type SidebarSection =
   | 'pipeline'
@@ -52,7 +53,7 @@ export function ApplicantSidebar({
 
       {/* Brand */}
       <div className="px-6 pt-7 pb-6 border-b border-white/10">
-        <div className="font-serif text-2xl font-bold text-white tracking-tight">Talanton.</div>
+        <BrandMark tone="light" />
         <p className="mt-1 text-[0.6rem] font-bold uppercase tracking-widest text-[#a4cc44]">
           SACCO &amp; SME CREDIT PIPELINE
         </p>

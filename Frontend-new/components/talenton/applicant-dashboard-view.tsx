@@ -270,7 +270,7 @@ export function ApplicantDashboardView({
                         : 'border-gray-200 hover:border-gray-300'
                     }`}
                   >
-                    <p className="font-bold text-sm text-[#103a27]">BOSA Member</p>
+                    <p className="font-bold text-sm text-[#103a27]">Individual Member</p>
                     <p className="text-xs text-gray-500 mt-1">Individual salary or savings anchored borrower.</p>
                   </button>
 
@@ -484,7 +484,7 @@ export function ApplicantDashboardView({
                   <div>
                     <span className="text-gray-400 block text-[0.65rem] uppercase font-bold">Borrower Type</span>
                     <span className="font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-full inline-block mt-0.5">
-                      {classification === 'individual' ? 'BOSA Member' : 'SME Growth'}
+                      {classification === 'individual' ? 'Individual Member' : 'SME Growth'}
                     </span>
                   </div>
                 </div>

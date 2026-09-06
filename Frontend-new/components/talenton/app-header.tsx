@@ -1,4 +1,4 @@
-import { Scale } from 'lucide-react'
+import { BrandMark } from '@/components/talenton/brand-mark'
 
 export function AppHeader({
   userName,
@@ -17,19 +17,7 @@ export function AppHeader({
 
   return (
     <header className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-4 py-5 sm:px-6">
-      <div className="flex items-center gap-3">
-        <span className="flex size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
-          <Scale className="size-5" />
-        </span>
-        <div>
-          <p className="font-serif text-lg font-semibold leading-none tracking-tight text-foreground">
-            Talanton
-          </p>
-          <p className="mt-1 text-[0.7rem] font-medium uppercase tracking-widest text-muted-foreground">
-            SACCO Credit Pipeline
-          </p>
-        </div>
-      </div>
+      <BrandMark size="sm" caption="SACCO Credit Pipeline" />
 
       <div className="flex items-center gap-3 rounded-full border border-glass-border bg-card px-2 py-1.5 pr-4 shadow-sm backdrop-blur-xl">
         <span className="flex size-8 items-center justify-center rounded-full bg-accent text-sm font-semibold text-accent-foreground">

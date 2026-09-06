@@ -47,7 +47,7 @@ export function LoanApplicationsList({
           reference: app.reference,
           applicantName: app.fullName || 'Member Applicant',
           purpose: app.purpose || 'Working Capital',
-          loanType: app.applicantType === 'cooperative' ? 'SME Business Facility' : 'BOSA Member Credit',
+          loanType: app.applicantType === 'cooperative' ? 'SME Business Facility' : 'Individual Member Credit',
           typeCode: app.applicantType === 'cooperative' ? 'business' : 'personal',
           principal: app.principal,
           status: app.status,

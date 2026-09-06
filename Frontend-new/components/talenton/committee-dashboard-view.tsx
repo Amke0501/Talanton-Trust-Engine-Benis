@@ -136,7 +136,7 @@ export function CommitteeDashboardView({
         reference: application.reference,
         borrowerName: `${application.fullName} (${application.memberId})`,
         borrowerMeta: `Authorized by Board Quorum (${approveCount}/5)`,
-        type: application.applicantType === 'individual' ? 'BOSA' : 'SME',
+        type: application.applicantType === 'individual' ? 'Individual' : 'SME',
         principal: application.principal,
         status: 'REPAYING',
         repaymentProgress: '0/12 paid',

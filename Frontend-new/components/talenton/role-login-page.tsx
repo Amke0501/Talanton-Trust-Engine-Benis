@@ -15,6 +15,7 @@ import {
   type CommitteeSeat,
 } from '@/lib/role-access'
 import type { RoleType } from '@/lib/talenton-data'
+import { BrandMark } from '@/components/talenton/brand-mark'
 
 /* ── per-role image config ───────────────────────────────────────── */
 const ROLE_META: Record<RoleType, { title: string; image: string | null; imageAlt: string }> = {
@@ -288,7 +289,7 @@ export function RoleLoginPage({ role }: { role: RoleType }) {
             >
               <ArrowLeft className="size-5" strokeWidth={2.5} />
             </Link>
-            <div className="text-2xl font-serif font-bold text-[#103a27]">Talanton.</div>
+            <BrandMark />
           </header>
 
           {/* Mobile decorative image/graphic */}

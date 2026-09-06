@@ -145,7 +145,7 @@ export function CommitteeHomeView({
                 >
                   <div className="flex items-center gap-4">
                     <div className="size-11 rounded-xl bg-[#0d2a1c] text-[#a4cc44] flex items-center justify-center font-bold text-xs shrink-0">
-                      {app.applicantType === 'individual' ? 'BOSA' : 'SME'}
+                      {app.applicantType === 'individual' ? 'Individual' : 'SME'}
                     </div>
                     <div>
                       <div className="flex items-center gap-2">

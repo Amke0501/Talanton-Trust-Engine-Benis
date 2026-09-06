@@ -9,6 +9,7 @@ import {
   LogOut,
 } from 'lucide-react'
 import type { NavItem } from '@/components/talenton/floating-nav'
+import { BrandMark } from '@/components/talenton/brand-mark'
 
 const NAV_ITEMS: { id: NavItem; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'home',         label: 'Dashboard',         icon: LayoutDashboard },
@@ -37,7 +38,7 @@ export function CommitteeSidebar({
 
       {/* Brand */}
       <div className="px-6 pt-7 pb-6 border-b border-white/10">
-        <div className="font-serif text-2xl font-bold text-white tracking-tight">Talanton.</div>
+        <BrandMark tone="light" />
         <p className="mt-1 text-[0.6rem] font-bold uppercase tracking-widest text-[#a4cc44]">
           Urban Credit Network
         </p>

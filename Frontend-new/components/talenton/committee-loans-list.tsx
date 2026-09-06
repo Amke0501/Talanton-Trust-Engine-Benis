@@ -135,7 +135,7 @@ export function CommitteeLoansList({
                   {/* Left: Applicant Identity */}
                   <div className="flex items-start gap-4 min-w-[280px]">
                     <div className="size-12 rounded-xl bg-[#0d2a1c] text-[#a4cc44] flex items-center justify-center font-bold text-sm shrink-0 mt-0.5">
-                      {app.applicantType === 'individual' ? 'BOSA' : 'SME'}
+                      {app.applicantType === 'individual' ? 'Individual' : 'SME'}
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
