@@ -427,3 +427,8 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Empty lockfiles with no package.json beside them. They made Vercel look for a Node
+# project at the repository root and triggered "multiple lockfiles" build warnings.
+/package-lock.json
+/Backend/package-lock.json

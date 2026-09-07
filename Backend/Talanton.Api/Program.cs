@@ -190,13 +190,20 @@ static string[] DefaultAllowedOrigins() =>
     "http://localhost:3000",
     "http://localhost:3001",
     "https://talanton-trust-engine.vercel.app",
-    "https://talanton-trust-engine-7.onrender.com"
+    "https://talanton-trust-engine-benis-roln.vercel.app",
+    "https://talanton-trust-engine-9.onrender.com"
 ];
 
-// Vercel gives every preview deployment its own hostname, so the project's preview
-// range is matched by pattern rather than listed origin by origin.
+// Vercel gives every deployment its own hostname — one per project, plus one per preview —
+// so the ranges are matched by pattern rather than listed origin by origin. Twice now a
+// working frontend has been blocked purely because its hostname was not in a hardcoded list,
+// which is silent from the server's side and looks like an unreachable API from the browser's.
+//
+// Deliberately not "https://talanton-trust-engine-*.vercel.app": that would admit any
+// vercel.app subdomain starting with the project name, and this API has no authentication.
 static string[] DefaultAllowedOriginPatterns() =>
 [
+    "https://talanton-trust-engine-benis-*.vercel.app",
     "https://talanton-trust-engine-*-amke0501s-projects.vercel.app"
 ];
 
