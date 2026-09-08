@@ -58,6 +58,9 @@ public class ApplicationDbContext : DbContext
     // Guarantor pledges and share locks
     public DbSet<ApplicationGuarantor> ApplicationGuarantors { get; set; }
 
+    // Member invoices
+    public DbSet<Invoice> Invoices { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -125,5 +128,13 @@ public class ApplicationDbContext : DbContext
         modelBuilder.Entity<ApplicationGuarantor>()
             .HasIndex(g => new { g.LoanApplicationId, g.MemberId })
             .IsUnique();
+
+        // Balance is worked out from Amount and AmountPaid, so it is not stored.
+        modelBuilder.Entity<Invoice>().Ignore(i => i.Balance);
+
+        // Holds are looked up by member on every disbursement and new application.
+        modelBuilder.Entity<Invoice>().HasIndex(i => new { i.MemberId, i.Status });
+
+        modelBuilder.Entity<Invoice>().HasIndex(i => i.InvoiceNumber).IsUnique();
     }
 }

@@ -43,6 +43,18 @@ public class LoanApplicationsController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<LoanApplicationDto>> CreateApplication([FromBody] CreateLoanApplicationDto dto, CancellationToken cancellationToken)
     {
+        // A member with unpaid invoices cannot open a new application until they are settled.
+        var invoiceHold = await GetInvoiceHoldAsync(dto.MemberId, cancellationToken);
+        if (invoiceHold.IsHeld)
+        {
+            return StatusCode(StatusCodes.Status409Conflict, new
+            {
+                message = $"A new application cannot be opened: {invoiceHold.Reason}",
+                invoiceHold.OutstandingBalance,
+                invoiceHold.InvoiceNumbers,
+            });
+        }
+
         var created = await _loanService.CreateLoanApplicationAsync(dto, cancellationToken);
         return CreatedAtAction(nameof(GetApplicationByRef), new { reference = created.Reference }, created);
     }
@@ -149,6 +161,22 @@ public class LoanApplicationsController : ControllerBase
             !string.IsNullOrEmpty(authDto.SecretarySignature)
         );
 
+        // Step 2a: a member with unpaid invoices does not get funds released.
+        var invoiceHold = await GetInvoiceHoldAsync(app.MemberId, cancellationToken);
+        if (invoiceHold.IsHeld)
+        {
+            await _audit.RecordAsync(Services.AuditActions.ReleaseRefused, "LoanApplication", reference,
+                actorName: authDto.RequestorRole,
+                after: $"Refused — {invoiceHold.Reason}",
+                cancellationToken: cancellationToken);
+
+            return StatusCode(StatusCodes.Status409Conflict, new DisbursementAuthorizationResponseDto
+            {
+                IsAuthorized = false,
+                Reason = $"Disbursement is on hold: {invoiceHold.Reason}"
+            });
+        }
+
         // Step 2b: the SACCO must still be holding enough cash. Authority to release is not the
         // same as having the money; releasing into an over-extended position is what this stops.
         var liquidity = await _liquidity.GetStatusForGateAsync(cancellationToken);
@@ -206,6 +234,24 @@ public class LoanApplicationsController : ControllerBase
             UpdatedApplication = updated,
             DisbursementAt = DateTime.UtcNow
         });
+    }
+
+    /// <summary>
+    /// Whether this member is blocked by unpaid invoices. Consulted before releasing funds and
+    /// before accepting a new application, per the founder's rule.
+    /// </summary>
+    private async Task<Services.InvoiceHoldResult> GetInvoiceHoldAsync(string memberId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(memberId))
+        {
+            return new Services.InvoiceHoldResult { IsHeld = false, Reason = "No member identifier on the file." };
+        }
+
+        var invoices = await _context.Invoices
+            .Where(i => i.MemberId == memberId)
+            .ToListAsync(cancellationToken);
+
+        return Services.InvoiceHoldService.Evaluate(invoices);
     }
 
     /// <summary>
