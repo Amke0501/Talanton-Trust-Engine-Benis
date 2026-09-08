@@ -36,7 +36,18 @@ export interface DocumentSlot {
   hint: string
   required: boolean
   fileName?: string
+  /**
+   * Where the uploaded file can be opened. This was being set on upload but was missing from the
+   * type, so it was dropped on any round-trip through a DocumentSlot — which is why no screen
+   * could offer the document for review.
+   */
+  fileUrl?: string
+  /** Bytes, when known — worth showing before someone opens a file over a slow connection. */
+  fileSize?: number
+  uploadedAt?: string
   status?: 'VERIFIED' | 'PENDING' | 'MISSING' | 'REJECTED'
+  /** Why an underwriter rejected it, so the applicant knows what to replace. */
+  rejectionReason?: string
 }
 
 export interface Guarantor {

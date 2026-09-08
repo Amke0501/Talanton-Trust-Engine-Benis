@@ -62,11 +62,17 @@ export function DocumentsView({
 
     const updatedSlots = documentSlots.map(s => {
       if (s.id === selectedSlot) {
-        return { 
-          ...s, 
-          status: 'VERIFIED' as const, 
+        // Uploading submits a document; it does not verify it. This previously set VERIFIED, so
+        // an applicant's own upload marked itself checked and the underwriter's review step was
+        // decorative.
+        return {
+          ...s,
+          status: 'PENDING' as const,
           fileName: file.name,
           fileUrl,
+          fileSize: file.size,
+          uploadedAt: new Date().toISOString(),
+          rejectionReason: undefined,
         }
       }
       return s
@@ -207,11 +213,28 @@ export function DocumentsView({
                       <div className="p-2 rounded-lg bg-white text-[#103a27] shrink-0">
                         <FileText className="size-4 text-[#103a27]" />
                       </div>
-                      <div>
+                      <div className="min-w-0">
                         <p className="text-xs font-bold text-[#103a27]">{doc.label}</p>
-                        <p className="text-[0.65rem] font-mono text-emerald-700 mt-0.5">
+                        <p className="text-[0.65rem] font-mono text-emerald-700 mt-0.5 truncate">
                           {doc.fileName || `${doc.id}_document.pdf`}
                         </p>
+                        {/* An applicant needs to be able to check what they actually sent, and to
+                            see why something was turned down rather than only that it was. */}
+                        {doc.fileUrl && (
+                          <a
+                            href={doc.fileUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-1 inline-block text-[0.65rem] font-semibold text-[#103a27] underline"
+                          >
+                            Open document
+                          </a>
+                        )}
+                        {doc.status === 'REJECTED' && doc.rejectionReason && (
+                          <p className="mt-1 text-[0.65rem] text-rose-700">
+                            Rejected: {doc.rejectionReason}. Please upload a replacement.
+                          </p>
+                        )}
                       </div>
                     </div>
 

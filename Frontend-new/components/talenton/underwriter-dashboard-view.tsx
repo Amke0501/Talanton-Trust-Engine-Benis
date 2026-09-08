@@ -27,6 +27,7 @@ import {
 } from '@/lib/talenton-data'
 import { Card, CardBody } from '@/components/talenton/primitives'
 import { updateUnderwritingOverride, verifyDocument } from '@/lib/api-service'
+import { DocumentReviewRow } from '@/components/talenton/document-review'
 
 export function UnderwriterDashboardView({
   application,
@@ -90,8 +91,12 @@ export function UnderwriterDashboardView({
   const overallPassed = depositMultiplierPassed && oneThirdPayPassed && guarantorCoverPassed
 
   // Verify Document Action
-  async function handleVerifyDoc(slotId: string, status: 'VERIFIED' | 'REJECTED') {
-    const updated = documents.map((d) => (d.id === slotId ? { ...d, status } : d))
+  async function handleVerifyDoc(slotId: string, status: 'VERIFIED' | 'REJECTED', reason?: string) {
+    const updated = documents.map((d) =>
+      d.id === slotId
+        ? { ...d, status, rejectionReason: status === 'REJECTED' ? reason : undefined }
+        : d
+    )
     setDocuments(updated)
     onUpdateApplication({ documents: updated })
     await verifyDocument(application.reference, slotId, status)
@@ -225,35 +230,13 @@ export function UnderwriterDashboardView({
                   <FileCheck className="size-4 text-[#103a27]" />
                   <h3 className="font-serif text-sm font-bold text-[#103a27]">Compliance & Document Verification</h3>
                 </div>
-                <span className="text-xs text-gray-400 font-medium">Click to verify</span>
+                <span className="text-xs text-gray-400 font-medium">Open each document before deciding</span>
               </div>
 
               <div className="space-y-3">
-                {documents.map((doc) => {
-                  const isVerified = doc.status === 'VERIFIED'
-                  return (
-                    <div key={doc.id} className="flex items-center justify-between p-3.5 rounded-xl border border-gray-100 bg-[#f4f5f4]">
-                      <div>
-                        <p className="text-xs font-bold text-[#103a27]">{doc.label}</p>
-                        <p className="text-[0.65rem] text-gray-500">{doc.fileName || 'Uploaded file'}</p>
-                      </div>
-
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => handleVerifyDoc(doc.id, isVerified ? 'REJECTED' : 'VERIFIED')}
-                          className={`px-3 py-1 rounded-full text-xs font-bold transition-all ${
-                            isVerified 
-                              ? 'bg-emerald-600 text-white hover:bg-emerald-700' 
-                              : 'bg-gray-200 text-gray-700 hover:bg-emerald-100 hover:text-emerald-800'
-                          }`}
-                        >
-                          {isVerified ? 'Verified ✓' : 'Mark Verified'}
-                        </button>
-                      </div>
-                    </div>
-                  )
-                })}
+                {documents.map((doc) => (
+                  <DocumentReviewRow key={doc.id} doc={doc} onDecision={handleVerifyDoc} />
+                ))}
               </div>
             </CardBody>
           </Card>
