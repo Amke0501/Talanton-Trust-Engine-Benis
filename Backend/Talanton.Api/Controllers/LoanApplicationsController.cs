@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Talanton.Api.DTOs;
 using Talanton.Api.Services.Interfaces;
 
@@ -11,15 +12,18 @@ public class LoanApplicationsController : ControllerBase
     private readonly ILoanApplicationService _loanService;
     private readonly Services.LiquidityService _liquidity;
     private readonly Services.AuditService _audit;
+    private readonly Data.ApplicationDbContext _context;
 
     public LoanApplicationsController(
         ILoanApplicationService loanService,
         Services.LiquidityService liquidity,
-        Services.AuditService audit)
+        Services.AuditService audit,
+        Data.ApplicationDbContext context)
     {
         _loanService = loanService;
         _liquidity = liquidity;
         _audit = audit;
+        _context = context;
     }
 
     [HttpGet]
@@ -189,6 +193,44 @@ public class LoanApplicationsController : ControllerBase
             Reason = $"Loan {reference} successfully disbursed.",
             UpdatedApplication = updated,
             DisbursementAt = DateTime.UtcNow
+        });
+    }
+
+    /// <summary>
+    /// Whether this member's own savings support the amount requested — the per-member check,
+    /// distinct from the SACCO-wide liquidity position.
+    /// </summary>
+    [HttpGet("{reference}/member-savings-check")]
+    public async Task<ActionResult<object>> CheckMemberSavings(string reference, CancellationToken cancellationToken)
+    {
+        var app = await _loanService.GetLoanApplicationByRefAsync(reference, cancellationToken);
+        if (app == null)
+            return NotFound(new { message = $"Loan application {reference} not found." });
+
+        // The SACCO's own record of what this member has saved, rather than the figure entered on
+        // the application. Falls back to the declared figure when no membership record exists, and
+        // says so, so the check is never silently measured against the applicant's own claim.
+        var membership = await _context.SaccoMemberships
+            .FirstOrDefaultAsync(m => m.MembershipNumber == app.MemberId, cancellationToken);
+
+        var recorded = membership?.SavingsBalance ?? app.SavingsBalance;
+
+        var result = Services.MemberSavingsService.Evaluate(
+            app.Principal, recorded, app.Multiplier, app.SavingsBalance);
+
+        return Ok(new
+        {
+            result.IsWithinCap,
+            result.Reason,
+            result.RecordedSavings,
+            result.Multiplier,
+            result.MaximumBorrowable,
+            result.RequestedPrincipal,
+            result.ExcessAmount,
+            result.DeclaredSavings,
+            result.DeclaredSavingsMismatch,
+            result.DeclaredSavingsDifference,
+            SavingsSource = membership is null ? "application (no membership record found)" : "SACCO membership record",
         });
     }
 
