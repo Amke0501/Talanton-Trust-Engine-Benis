@@ -47,7 +47,7 @@ public static class DemoUsersSeeder
                 {
                     Id = Guid.NewGuid(),
                     Email = seed.Email,
-                    PasswordHash = seed.Password,
+                    PasswordHash = Services.PasswordHasher.Hash(seed.Password),
                     FullName = seed.FullName,
                     IsActive = true,
                     CreatedAt = DateTime.UtcNow,
@@ -57,7 +57,12 @@ public static class DemoUsersSeeder
             }
             else
             {
-                user.PasswordHash = seed.Password;
+                // Only re-hash when the stored value is stale, so a password changed elsewhere
+                // is not silently reset back to the demo one on every restart.
+                if (Services.PasswordHasher.IsLegacyPlaintext(user.PasswordHash))
+                {
+                    user.PasswordHash = Services.PasswordHasher.Hash(seed.Password);
+                }
                 user.FullName = seed.FullName;
                 user.IsActive = true;
             }

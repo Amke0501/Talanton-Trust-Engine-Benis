@@ -30,9 +30,21 @@ public class AuthController : ControllerBase
             u => u.Email.ToLower() == email,
             cancellationToken);
 
-        if (user is null || !user.IsActive || user.PasswordHash != request.Password)
+        // Verify unconditionally rather than short-circuiting on a missing account, so an unknown
+        // email costs the same time as a wrong password and cannot be distinguished by timing.
+        var needsRehash = false;
+        var passwordOk = Services.PasswordHasher.Verify(request.Password, user?.PasswordHash, out needsRehash);
+
+        if (user is null || !user.IsActive || !passwordOk)
         {
             return Unauthorized(new { message = "Invalid email or password." });
+        }
+
+        // An account whose password is still stored in the old plaintext form is upgraded the
+        // first time its owner signs in, so the change needs no migration or password reset.
+        if (needsRehash)
+        {
+            user.PasswordHash = Services.PasswordHasher.Hash(request.Password);
         }
 
         var assignedRoleName = await _db.UserRoleAssignments
