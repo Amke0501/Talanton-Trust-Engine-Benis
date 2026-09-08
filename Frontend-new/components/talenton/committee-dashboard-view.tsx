@@ -49,9 +49,26 @@ export function CommitteeDashboardView({
     ]
   )
 
+  // Risk figures shown to the board. These were previously literal fallbacks — every file
+  // without a stored ratio displayed "82.0%" regardless of its actual numbers, which is worse
+  // than showing nothing: it reads as a real measurement of this applicant.
+  const estMonthlyPayment =
+    application.tenureMonths > 0 ? application.principal / application.tenureMonths : 0
+  const derivedDti =
+    application.monthlyIncome > 0
+      ? ((application.monthlyDebt + estMonthlyPayment) / application.monthlyIncome) * 100
+      : null
+  const dtiRatio = application.dtiNetRatio ?? derivedDti
+
   // Portfolio State
   const [portfolioLoans, setPortfolioLoans] = useState<PortfolioLoan[]>(SEED_PORTFOLIO_LOANS)
   const [portfolioFilter, setPortfolioFilter] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'ACTIVE' | 'COMPLETED' | 'REJECTED'>('ALL')
+
+  // Sum of what is actually out on loan, rather than a fixed figure that never moved when
+  // funds were released.
+  const activePortfolioValue = portfolioLoans
+    .filter((l) => l.status === 'REPAYING')
+    .reduce((total, l) => total + (l.principal || 0), 0)
   const [isDisbursing, setIsDisbursing] = useState(false)
   // The seat this member signed in under. It decides which vote they may cast and whether they
   // are permitted to release funds; the server re-checks both.
@@ -233,11 +250,11 @@ export function CommitteeDashboardView({
                 </div>
                 <div className="flex justify-between py-1.5 border-b border-gray-50">
                   <span className="text-gray-500 font-medium">DTI Percentage</span>
-                  <span className="font-bold text-[#103a27]">{application.dtiNetRatio?.toFixed(1) || '82.0'}%</span>
+                  <span className="font-bold text-[#103a27]">{dtiRatio != null ? `${dtiRatio.toFixed(1)}%` : '—'}</span>
                 </div>
                 <div className="flex justify-between py-1.5 border-b border-gray-50">
                   <span className="text-gray-500 font-medium">Savings Multiplier</span>
-                  <span className="font-bold text-[#103a27]">{application.multiplier?.toFixed(2) || '3.75'}x</span>
+                  <span className="font-bold text-[#103a27]">{application.multiplier ? `${application.multiplier.toFixed(2)}x` : '—'}</span>
                 </div>
                 <div className="flex justify-between items-center py-1.5 border-b border-gray-50">
                   <span className="text-gray-500 font-medium">Audit Check Verdict</span>
@@ -274,7 +291,7 @@ export function CommitteeDashboardView({
                   </p>
                 </div>
                 <span className="rounded-full bg-[#103a27]/10 px-3 py-1 text-xs font-bold text-[#103a27]">
-                  Board Quorum: 4 / 5
+                  Board Quorum: {approveCount} / {boardVotes.length}
                 </span>
               </div>
 
@@ -453,7 +470,7 @@ export function CommitteeDashboardView({
             <div className="flex items-center gap-3">
               <div className="rounded-xl bg-[#0d2a1c] px-3.5 py-2 text-white text-xs">
                 <span className="text-white/60 block text-[0.6rem]">ACTIVE PORTFOLIO</span>
-                <span className="font-mono font-bold text-[#a4cc44]">UGX 89,000,000</span>
+                <span className="font-mono font-bold text-[#a4cc44]">{formatUGX(activePortfolioValue)}</span>
               </div>
             </div>
           </div>

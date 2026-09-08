@@ -750,12 +750,26 @@ export interface GuarantorCoverage {
   }[]
 }
 
-/** How much of the uncollateralised gap the guarantors actually cover, per the server's rules. */
-export async function fetchGuarantorCoverage(reference: string): Promise<GuarantorCoverage | undefined> {
-  return requestBackend<GuarantorCoverage>(
+export type CoverageResult =
+  | { state: 'ok'; coverage: GuarantorCoverage }
+  /** The server has no record of this file — typically one created in the browser. */
+  | { state: 'unknown-file' }
+  | { state: 'unavailable' }
+
+/**
+ * How much of the uncollateralised gap the guarantors actually cover, per the server's rules.
+ *
+ * A file the server has never seen is reported separately from a server that cannot be reached:
+ * they look the same to the caller but mean very different things to whoever is reading the
+ * screen, and calling the first one a server failure sends people hunting for an outage.
+ */
+export async function fetchGuarantorCoverage(reference: string): Promise<CoverageResult> {
+  const coverage = await requestBackend<GuarantorCoverage>(
     `/api/loanapplications/${encodeURIComponent(reference)}/guarantor-coverage`,
     { method: 'GET' }
   )
+  if (coverage) return { state: 'ok', coverage }
+  return { state: getLastBackendFailure() === 'rejected' ? 'unknown-file' : 'unavailable' }
 }
 
 export interface LiquidityStatus {

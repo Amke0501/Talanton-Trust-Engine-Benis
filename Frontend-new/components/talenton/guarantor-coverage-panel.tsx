@@ -12,7 +12,7 @@ import { formatUGX } from '@/lib/talenton-data'
  */
 export function GuarantorCoveragePanel({ reference }: { reference: string }) {
   const [coverage, setCoverage] = useState<GuarantorCoverage | null>(null)
-  const [state, setState] = useState<'loading' | 'ready' | 'unavailable'>('loading')
+  const [state, setState] = useState<'loading' | 'ready' | 'unknown-file' | 'unavailable'>('loading')
 
   useEffect(() => {
     let active = true
@@ -20,7 +20,8 @@ export function GuarantorCoveragePanel({ reference }: { reference: string }) {
     fetchGuarantorCoverage(reference)
       .then((result) => {
         if (!active) return
-        if (result) { setCoverage(result); setState('ready') } else { setState('unavailable') }
+        if (result.state === 'ok') { setCoverage(result.coverage); setState('ready') }
+        else { setState(result.state) }
       })
       .catch(() => { if (active) setState('unavailable') })
     return () => { active = false }
@@ -30,10 +31,19 @@ export function GuarantorCoveragePanel({ reference }: { reference: string }) {
     return <p className="text-xs text-gray-500">Checking guarantor coverage…</p>
   }
 
+  if (state === 'unknown-file') {
+    return (
+      <p className="text-xs text-gray-600">
+        This application was created in this browser and has not been submitted to the server yet,
+        so there are no guarantor records to check against.
+      </p>
+    )
+  }
+
   if (state === 'unavailable' || !coverage) {
     return (
       <p className="text-xs text-amber-700">
-        Guarantor coverage could not be retrieved from the server.
+        Guarantor coverage could not be retrieved &mdash; the server did not respond.
       </p>
     )
   }
