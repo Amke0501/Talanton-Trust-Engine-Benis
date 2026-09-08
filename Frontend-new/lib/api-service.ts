@@ -25,18 +25,39 @@ export function getLastBackendFailure(): BackendFailure {
   return lastBackendFailure
 }
 
+/**
+ * Hosts that sleep when idle drop the first request that wakes them, so a single retry turns a
+ * visible failure into a slow load. Only GETs are retried: repeating a POST that may have been
+ * received would risk acting twice.
+ */
+const WAKE_RETRY_DELAY_MS = 1200
+
 async function requestBackend<T>(path: string, options: RequestInit): Promise<T | undefined> {
   const url = `${BACKEND_API_BASE_URL}${path}`
-  try {
-    const response = await fetch(url, {
+  const method = (options.method || 'GET').toUpperCase()
+  const retryable = method === 'GET'
+
+  const send = () =>
+    fetch(url, {
       ...options,
       headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     })
+
+  try {
+    let response: Response
+    try {
+      response = await send()
+    } catch (first) {
+      if (!retryable) throw first
+      console.warn(`[API] ${method} ${path} did not connect; the service may be waking. Retrying once…`)
+      await new Promise((resolve) => setTimeout(resolve, WAKE_RETRY_DELAY_MS))
+      response = await send()
+    }
     if (!response.ok) {
       lastBackendFailure = 'rejected'
       const body = await response.text().catch(() => '')
       console.error(
-        `[API] ${options.method || 'GET'} ${path} rejected with ${response.status} ${response.statusText}. ` +
+        `[API] ${method} ${path} rejected with ${response.status} ${response.statusText}. ` +
           `The change was NOT applied on the server.${body ? ` Response: ${body.slice(0, 300)}` : ''}`
       )
       return undefined
@@ -46,9 +67,10 @@ async function requestBackend<T>(path: string, options: RequestInit): Promise<T 
   } catch (error) {
     lastBackendFailure = 'unreachable'
     console.error(
-      `[API] ${options.method || 'GET'} ${path} could not reach the server at ${BACKEND_API_BASE_URL}. ` +
-        `Falling back to local state, so what you see is NOT what the server holds. ` +
-        `Check NEXT_PUBLIC_API_URL and that the origin is allowed by CORS.`,
+      `[API] ${method} ${path} could not reach ${BACKEND_API_BASE_URL}. ` +
+        `Showing local data, which is NOT what the server holds. Usual causes, in order: the API ` +
+        `is asleep and did not wake in time (try again in a moment), NEXT_PUBLIC_API_URL is unset ` +
+        `or wrong, or this origin is not in the API's allowed CORS origins.`,
       error
     )
     return undefined
