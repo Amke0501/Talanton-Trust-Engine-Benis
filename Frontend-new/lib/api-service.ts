@@ -10,6 +10,7 @@ import {
   SEED_PASSPORT_MEMBERS,
   SEED_PORTFOLIO_LOANS,
   type PortfolioLoan,
+  type BoardMemberVote,
 } from './talenton-data'
 import { getSupabase, isSupabaseConfigured } from './supabase'
 
@@ -88,7 +89,111 @@ function persistLocalState() {
 // 1. APPLICATIONS
 // ----------------------------------------------------------------------
 
+/** The shape the .NET API returns for a loan application. */
+interface ApiLoanApplication {
+  id: string
+  reference: string
+  applicantName?: string
+  memberId?: string
+  applicantType?: string
+  status?: string
+  stage?: string
+  principal?: number
+  purpose?: string
+  tenureMonths?: number
+  savingsBalance?: number
+  monthlyIncome?: number
+  monthlyDebt?: number
+  multiplier?: number
+  submittedOn?: string
+  statusNote?: string
+  dtiNetRatio?: number
+  netTakeHome?: number
+  guardrailDepositMultiplierPassed?: boolean
+  guardrailOneThirdPayPassed?: boolean
+  guardrailGuarantorPassed?: boolean
+  verdict?: string
+  counterOfferPrincipal?: number
+  counterOfferTenureMonths?: number
+  counterOfferReason?: string
+  counterOfferStatus?: string
+  applicantConsentAt?: string
+  applicantConsentReceived?: boolean
+  appraisalOfficer?: string
+  securitySignature?: string
+  guarantors?: { id: string; name: string; memberId: string; pledgedShares: number; availableShares: number }[]
+  committeeVotes?: { memberName: string; memberRole: string; vote: string }[]
+}
+
+function fromApi(a: ApiLoanApplication): Application {
+  return {
+    ...INITIAL_APPLICATION,
+    id: a.id,
+    reference: a.reference,
+    fullName: a.applicantName || '',
+    memberId: a.memberId || '',
+    applicantType: (a.applicantType as ApplicantType) || 'individual',
+    principal: a.principal ?? 0,
+    purpose: a.purpose || '',
+    tenureMonths: a.tenureMonths ?? 12,
+    savingsBalance: a.savingsBalance ?? 0,
+    monthlyIncome: a.monthlyIncome ?? 0,
+    monthlyDebt: a.monthlyDebt ?? 0,
+    multiplier: a.multiplier ?? 3,
+    status: (a.status as Application['status']) || 'submitted',
+    stage: (a.stage as Application['stage']) || 'verification',
+    submittedOn: a.submittedOn || 'Draft',
+    statusNote: a.statusNote || '',
+    dtiNetRatio: a.dtiNetRatio,
+    netTakeHome: a.netTakeHome,
+    guardrailDepositMultiplierPassed: a.guardrailDepositMultiplierPassed,
+    guardrailOneThirdPayPassed: a.guardrailOneThirdPayPassed,
+    guardrailGuarantorPassed: a.guardrailGuarantorPassed,
+    verdict: (a.verdict as Application['verdict']) || 'PENDING',
+    counterOfferPrincipal: a.counterOfferPrincipal,
+    counterOfferTenureMonths: a.counterOfferTenureMonths,
+    counterOfferReason: a.counterOfferReason,
+    counterOfferStatus: (a.counterOfferStatus as Application['counterOfferStatus']) || 'NONE',
+    applicantConsentAt: a.applicantConsentAt,
+    applicantConsentReceived: a.applicantConsentReceived ?? false,
+    appraisalOfficer: a.appraisalOfficer,
+    securitySignature: a.securitySignature,
+    guarantors: (a.guarantors || []).map((g) => ({
+      id: g.id,
+      name: g.name,
+      memberId: g.memberId,
+      pledgedShares: Number(g.pledgedShares) || 0,
+      availableShares: Number(g.availableShares) || 0,
+    })),
+    committeeVotes: (a.committeeVotes || []).map((v, i) => ({
+      id: `v${i + 1}`,
+      name: v.memberName,
+      role: v.memberRole,
+      vote: (v.vote as BoardMemberVote['vote']) ?? null,
+    })),
+  }
+}
+
 export async function fetchApplications(): Promise<Application[]> {
+  // The API is the authority: it is where the founder's rules are enforced and where votes,
+  // guarantor pledges and share locks are persisted. Reads used to bypass it entirely, so the
+  // screens showed browser-local data while the server reasoned about different files — which is
+  // why figures like "committed, awaiting release" could never agree with the queue beside them.
+  const fromServer = await requestBackend<ApiLoanApplication[]>('/api/loanapplications', { method: 'GET' })
+
+  if (fromServer && Array.isArray(fromServer)) {
+    const serverApps = fromServer.map(fromApi)
+    const serverRefs = new Set(serverApps.map((a) => a.reference.toLowerCase()))
+
+    // Keep anything the server has never seen — drafts, and files created while it was
+    // unreachable — so nothing disappears from the applicant's view.
+    const localOnly = memoryApplications.filter((a) => !serverRefs.has(a.reference.toLowerCase()))
+
+    memoryApplications = [...serverApps, ...localOnly]
+    persistLocalState()
+    return memoryApplications
+  }
+
   const sb = getSupabase()
   if (sb) {
     try {
