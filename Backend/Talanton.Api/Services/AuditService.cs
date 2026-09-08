@@ -73,6 +73,7 @@ public static class AuditActions
     public const string CounterOfferMade = "COUNTER_OFFER_MADE";
     public const string CounterOfferAnswered = "COUNTER_OFFER_ANSWERED";
     public const string StageRouted = "STAGE_ROUTED";
+    public const string ResubmittedWithGuarantors = "RESUBMITTED_WITH_GUARANTORS";
     public const string FundsReleased = "FUNDS_RELEASED";
     public const string ReleaseRefused = "RELEASE_REFUSED";
 }

@@ -55,6 +55,14 @@ public class CommitteeVoteDetailDto
     public string Vote { get; set; } = "ABSTAIN"; // APPROVE | REJECT | ABSTAIN
 }
 
+/// <summary>
+/// An applicant's second attempt after declining a revised offer, backed by additional guarantors.
+/// </summary>
+public class ResubmitWithGuarantorsDto
+{
+    public List<GuarantorDto> Guarantors { get; set; } = new();
+}
+
 public class CreateLoanApplicationDto
 {
     public string ApplicantName { get; set; } = string.Empty;

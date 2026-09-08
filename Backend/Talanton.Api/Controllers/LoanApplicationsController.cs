@@ -61,6 +61,18 @@ public class LoanApplicationsController : ControllerBase
         return updated == null ? NotFound() : Ok(updated);
     }
 
+    /// <summary>
+    /// An applicant's second attempt after declining a revised offer, on the strength of at least
+    /// two additional guarantors. Returns the file to underwriting, never straight to committee.
+    /// </summary>
+    [HttpPost("{reference}/resubmit-with-guarantors")]
+    public async Task<ActionResult<LoanApplicationDto>> ResubmitWithGuarantors(
+        string reference, [FromBody] ResubmitWithGuarantorsDto dto, CancellationToken cancellationToken)
+    {
+        var updated = await _loanService.ResubmitWithGuarantorsAsync(reference, dto, cancellationToken);
+        return updated == null ? NotFound() : Ok(updated);
+    }
+
     [HttpPost("{reference}/guarantor")]
     public async Task<ActionResult<LoanApplicationDto>> AddGuarantor(string reference, [FromBody] GuarantorDto guarantor, CancellationToken cancellationToken)
     {

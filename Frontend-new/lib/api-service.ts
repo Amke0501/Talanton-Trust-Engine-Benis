@@ -636,6 +636,43 @@ export async function respondToCounterOffer(
   return updatedFromBackend || updatedApplication
 }
 
+/** How many new guarantors are needed to have a declined offer reconsidered. */
+export const MINIMUM_ADDITIONAL_GUARANTORS = 2
+
+/**
+ * Asks for a declined application to be reconsidered on the strength of additional guarantors.
+ * The server counts only guarantors not already on the file, and returns it to underwriting for a
+ * fresh decision rather than advancing it.
+ */
+export async function resubmitWithGuarantors(
+  reference: string,
+  guarantors: Guarantor[]
+): Promise<{ ok: boolean; application?: Application; reason?: string }> {
+  const updated = await requestBackend<Application>(
+    `/api/loanapplications/${encodeURIComponent(reference)}/resubmit-with-guarantors`,
+    { method: 'POST', body: JSON.stringify({ guarantors }) }
+  )
+
+  if (!updated) {
+    return {
+      ok: false,
+      reason:
+        getLastBackendFailure() === 'unreachable'
+          ? 'Could not reach the server, so the application was not resubmitted.'
+          : 'The server did not accept the resubmission.',
+    }
+  }
+
+  // The server reports a shortfall by leaving the file where it was and explaining why.
+  const accepted = updated.status === 'in_review'
+  memoryApplications = memoryApplications.map((a) => (a.reference === reference ? { ...a, ...updated } : a))
+  persistLocalState()
+
+  return accepted
+    ? { ok: true, application: updated }
+    : { ok: false, application: updated, reason: updated.statusNote }
+}
+
 export async function signAndRouteToCommittee(
   reference: string,
   payload: {

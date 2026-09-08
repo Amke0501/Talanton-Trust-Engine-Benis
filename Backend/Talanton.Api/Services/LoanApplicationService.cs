@@ -608,14 +608,98 @@ public class LoanApplicationService : ILoanApplicationService
         app.CounterOfferStatus = "DECLINED";
         app.ApplicantConsentReceived = false;
         app.ApplicantConsentAt = null;
-        app.Status = "declined";
+        // Declining ends the revised offer, but not necessarily the application: the applicant may
+        // strengthen the file with additional guarantors and have it underwritten again. The file
+        // still cannot reach committee on this verdict — resubmission returns it to underwriting
+        // for a fresh decision, not past it.
+        app.Status = "awaiting_guarantors";
         app.Stage = "underwriting";
         app.Verdict = "DECLINED";
-        app.StatusNote = "Applicant declined the revised offer. The file cannot proceed without a new underwriting decision.";
+        app.StatusNote =
+            $"Applicant declined the revised offer. The file can be reconsidered if at least " +
+            $"{MinimumAdditionalGuarantors} additional guarantors are added; otherwise it terminates here.";
         await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
         await _audit.RecordAsync(AuditActions.CounterOfferAnswered, "LoanApplication", app.Reference,
             after: "Applicant DECLINED the revised offer",
             cancellationToken: cancellationToken);
+        return app;
+    }
+
+    /// <summary>
+    /// How many *new* guarantors an applicant must add to have a declined offer reconsidered.
+    /// </summary>
+    public const int MinimumAdditionalGuarantors = 2;
+
+    /// <summary>
+    /// Reopens an application the applicant declined, on the strength of additional guarantors.
+    ///
+    /// Only guarantors not already on the file count toward the requirement — re-listing existing
+    /// ones adds no security, which is the whole point of asking for them.
+    /// </summary>
+    public async Task<LoanApplicationDto?> ResubmitWithGuarantorsAsync(
+        string reference, ResubmitWithGuarantorsDto dto, CancellationToken cancellationToken = default)
+    {
+        var app = await GetLoanApplicationByRefAsync(reference, cancellationToken);
+        if (app == null) return null;
+
+        if (!string.Equals(app.CounterOfferStatus, "DECLINED", StringComparison.OrdinalIgnoreCase))
+        {
+            app.StatusNote = "This application has no declined offer to reconsider.";
+            return app;
+        }
+
+        var existingMemberIds = app.Guarantors
+            .Select(g => g.MemberId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var additions = (dto.Guarantors ?? new List<GuarantorDto>())
+            .Where(g => !string.IsNullOrWhiteSpace(g.MemberId) && !existingMemberIds.Contains(g.MemberId))
+            .GroupBy(g => g.MemberId, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
+
+        if (additions.Count < MinimumAdditionalGuarantors)
+        {
+            app.StatusNote =
+                $"{MinimumAdditionalGuarantors} additional guarantors are required to reconsider this file. " +
+                $"{additions.Count} new guarantor(s) supplied; guarantors already on the file do not count.";
+            return app;
+        }
+
+        var entity = await _context.LoanApplications
+            .FirstOrDefaultAsync(a => a.ApplicationNumber == app.Reference, cancellationToken);
+
+        foreach (var guarantor in additions)
+        {
+            guarantor.Id = Guid.NewGuid().ToString("N");
+            app.Guarantors.Add(guarantor);
+            await PersistGuarantorAsync(entity, guarantor, cancellationToken);
+        }
+
+        var totalPledged = app.Guarantors.Sum(g => g.PledgedShares);
+        var uncollateralized = Math.Max(0, app.Principal - app.SavingsBalance);
+        app.GuardrailGuarantorPassed = totalPledged >= uncollateralized;
+
+        // Back to underwriting for a fresh decision. The verdict is cleared so the previous
+        // decline cannot carry through, and the counter-offer is closed out.
+        app.CounterOfferStatus = "NONE";
+        app.CounterOfferPrincipal = null;
+        app.CounterOfferTenureMonths = null;
+        app.CounterOfferReason = null;
+        app.Verdict = "PENDING";
+        app.Status = "in_review";
+        app.Stage = "underwriting";
+        app.StatusNote =
+            $"Applicant added {additions.Count} additional guarantors after declining the revised offer. " +
+            $"Total pledged is now {totalPledged:N0} against an uncollateralised gap of {uncollateralized:N0}. " +
+            "Returned to underwriting for a fresh decision.";
+
+        await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
+        await _audit.RecordAsync(AuditActions.ResubmittedWithGuarantors, "LoanApplication", app.Reference,
+            after: $"Added {additions.Count} guarantors ({string.Join(", ", additions.Select(g => g.MemberId))}); " +
+                   $"returned to underwriting",
+            cancellationToken: cancellationToken);
+
         return app;
     }
 

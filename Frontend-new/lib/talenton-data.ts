@@ -27,6 +27,8 @@ export type ApplicationStatus =
   | 'declined'
   | 'disbursed'
   | 'counter_offer_pending'
+  /** Declined a revised offer, but may still be reconsidered if more guarantors are added. */
+  | 'awaiting_guarantors'
 
 export interface DocumentSlot {
   id: string
@@ -458,6 +460,7 @@ export const STATUS_META: Record<
   submitted: { label: 'Submitted', tone: 'warning' },
   in_review: { label: 'In review', tone: 'warning' },
   counter_offer_pending: { label: 'Counter-offer', tone: 'warning' },
+  awaiting_guarantors: { label: 'More guarantors needed', tone: 'warning' },
   approved: { label: 'Approved', tone: 'success' },
   declined: { label: 'Declined', tone: 'destructive' },
   disbursed: { label: 'Disbursed', tone: 'success' },
