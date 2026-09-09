@@ -189,26 +189,6 @@ export function ApplicantDashboard({
               const isCommittee = app.stage === 'committee'
               const isUnderwriting = app.stage === 'underwriting' || app.stage === 'verification'
               const isCounterOfferPending = app.counterOfferStatus === 'PENDING' || app.status === 'counter_offer_pending'
-                        {isCounterOfferPending ? 'Applicant consent required' : isCommittee ? 'Stage 4: Committee Quorum Vote' : 'Stage 3: Underwriting Risk Audit'}
-
-                  {isCounterOfferPending && (
-                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3">
-                      <p className="text-sm font-bold text-amber-950">Your revised offer is ready for consent.</p>
-                      <p className="text-xs text-amber-900">
-                        Revised principal: <strong className="font-mono">{formatUGX(app.counterOfferPrincipal ?? app.principal)}</strong>
-                        {' '}&bull; Tenure: <strong>{app.counterOfferTenureMonths ?? app.tenureMonths} months</strong>
-                      </p>
-                      {app.counterOfferReason && <p className="text-xs text-amber-900">{app.counterOfferReason}</p>}
-                      <div className="flex flex-wrap gap-2">
-                        <button type="button" onClick={() => onCounterOfferDecision?.('ACCEPT')} className="rounded-lg bg-[#103a27] px-4 py-2 text-xs font-bold text-white">
-                          Accept revised offer
-                        </button>
-                        <button type="button" onClick={() => onCounterOfferDecision?.('DECLINE')} className="rounded-lg border border-amber-300 px-4 py-2 text-xs font-bold text-amber-950">
-                          Decline offer
-                        </button>
-                      </div>
-                    </div>
-                  )}
 
               return (
                 <div 
@@ -230,12 +210,31 @@ export function ApplicantDashboard({
 
                     <div>
                       <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase ${
-                        isCommittee ? 'bg-amber-100 text-amber-900' : 'bg-emerald-100 text-emerald-900'
+                        isCounterOfferPending ? 'bg-amber-100 text-amber-900' : isCommittee ? 'bg-amber-100 text-amber-900' : 'bg-emerald-100 text-emerald-900'
                       }`}>
-                        {isCommittee ? 'Stage 4: Committee Quorum Vote' : 'Stage 3: Underwriting Risk Audit'}
+                        {isCounterOfferPending ? 'Applicant consent required' : isCommittee ? 'Stage 4: Committee Quorum Vote' : 'Stage 3: Underwriting Risk Audit'}
                       </span>
                     </div>
                   </div>
+
+                  {isCounterOfferPending && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3">
+                      <p className="text-sm font-bold text-amber-950">Your revised offer is ready for consent.</p>
+                      <p className="text-xs text-amber-900">
+                        Revised principal: <strong className="font-mono">{formatUGX(app.counterOfferPrincipal ?? app.principal)}</strong>
+                        {' '}&bull; Tenure: <strong>{app.counterOfferTenureMonths ?? app.tenureMonths} months</strong>
+                      </p>
+                      {app.counterOfferReason && <p className="text-xs text-amber-900">{app.counterOfferReason}</p>}
+                      <div className="flex flex-wrap gap-2">
+                        <button type="button" onClick={() => onCounterOfferDecision?.('ACCEPT')} className="rounded-lg bg-[#103a27] px-4 py-2 text-xs font-bold text-white">
+                          Accept revised offer
+                        </button>
+                        <button type="button" onClick={() => onCounterOfferDecision?.('DECLINE')} className="rounded-lg border border-amber-300 px-4 py-2 text-xs font-bold text-amber-950">
+                          Decline offer
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Note & Status */}
                   <div className="p-3.5 rounded-xl bg-gray-50 border border-gray-100 flex items-start gap-2.5">
