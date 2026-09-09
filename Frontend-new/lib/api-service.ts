@@ -476,7 +476,26 @@ export async function submitOrUpdateApplication(
   reference: string | undefined,
   payload: CreateLoanApplicationPayload
 ): Promise<{ success: boolean; data?: Application; error?: string }> {
-  // If editing/submitting an existing draft
+  const existing = reference ? memoryApplications.find((a) => a.reference === reference) : undefined
+
+  // Submitting a draft is the moment the application first becomes real, so it has to reach the
+  // server. This previously took the local update path below and never posted, so the applicant
+  // got a reference number for a file the underwriter could not see.
+  const submittingADraft =
+    Boolean(existing) && !payload.isDraft && (existing!.status === 'draft' || existing!.stage === 'draft')
+
+  if (submittingADraft) {
+    const created = await createLoanApplication(payload)
+    if (created.success && created.data) {
+      // The server assigns the reference. Drop the local draft so the file does not appear twice
+      // under two different numbers.
+      memoryApplications = memoryApplications.filter((a) => a.reference !== reference)
+      persistLocalState()
+    }
+    return created
+  }
+
+  // If editing an existing draft, or updating one already known to the server
   if (reference && memoryApplications.some(a => a.reference === reference)) {
     const isDraft = Boolean(payload.isDraft)
     const status = isDraft ? 'draft' : 'submitted'

@@ -498,7 +498,11 @@ public class LoanApplicationService : ILoanApplicationService
 
     public async Task<LoanApplicationDto?> UpdateUnderwritingAsync(string reference, UpdateUnderwritingOverrideDto dto, CancellationToken cancellationToken = default)
     {
-        var app = Applications.FirstOrDefault(a => a.Reference.Equals(reference, StringComparison.OrdinalIgnoreCase));
+        // Resolve through the merged view, not the hard-coded demo list. Applications created
+        // through the API exist only in the database, so looking them up here returned null and
+        // the caller got a 404 — which is why an underwriter's revised terms were never recorded
+        // and the applicant was never offered the choice.
+        var app = await GetLoanApplicationByRefAsync(reference, cancellationToken);
         if (app == null) return null;
 
         var entity = await _context.LoanApplications.FirstOrDefaultAsync(a => a.ApplicationNumber == app.Reference, cancellationToken);
@@ -565,7 +569,11 @@ public class LoanApplicationService : ILoanApplicationService
 
     public async Task<LoanApplicationDto?> RespondToCounterOfferAsync(string reference, CounterOfferDecisionDto dto, CancellationToken cancellationToken = default)
     {
-        var app = Applications.FirstOrDefault(a => a.Reference.Equals(reference, StringComparison.OrdinalIgnoreCase));
+        // Resolve through the merged view, not the hard-coded demo list. Applications created
+        // through the API exist only in the database, so looking them up here returned null and
+        // the caller got a 404 — which is why an underwriter's revised terms were never recorded
+        // and the applicant was never offered the choice.
+        var app = await GetLoanApplicationByRefAsync(reference, cancellationToken);
         if (app == null) return null;
 
         var entity = await _context.LoanApplications.FirstOrDefaultAsync(a => a.ApplicationNumber == app.Reference, cancellationToken);
@@ -878,7 +886,11 @@ public class LoanApplicationService : ILoanApplicationService
 
     public async Task<LoanApplicationDto?> RouteStageAsync(string reference, string targetStage, CancellationToken cancellationToken = default)
     {
-        var app = Applications.FirstOrDefault(a => a.Reference.Equals(reference, StringComparison.OrdinalIgnoreCase));
+        // Resolve through the merged view, not the hard-coded demo list. Applications created
+        // through the API exist only in the database, so looking them up here returned null and
+        // the caller got a 404 — which is why an underwriter's revised terms were never recorded
+        // and the applicant was never offered the choice.
+        var app = await GetLoanApplicationByRefAsync(reference, cancellationToken);
         if (app == null) return null;
 
         var entity = await _context.LoanApplications.FirstOrDefaultAsync(a => a.ApplicationNumber == app.Reference, cancellationToken);

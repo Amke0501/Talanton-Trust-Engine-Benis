@@ -259,6 +259,7 @@ export function DashboardRolePage({ role }: { role: RoleType }) {
           onSubmitToUnderwriter={handleSubmitToUnderwriter}
           onSaveDraft={handleSaveDraft}
           onClose={() => setActiveSection('applicant-dashboard')}
+          onCounterOfferDecision={handleCounterOfferDecision}
         />
       )
     }

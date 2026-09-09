@@ -32,12 +32,14 @@ export function ApplicantDashboardView({
   onSubmitToUnderwriter,
   onSaveDraft,
   onClose,
+  onCounterOfferDecision,
 }: {
   application: Application
   onUpdateApplication: (updated: Partial<Application>) => void
   onSubmitToUnderwriter: (appData: Partial<Application>) => Promise<void>
   onSaveDraft?: (appData: Partial<Application>) => Promise<void>
   onClose?: () => void
+  onCounterOfferDecision?: (decision: 'ACCEPT' | 'DECLINE') => Promise<void>
 }) {
   // Step indicator state: 1: Basics, 2: Financials, 3: Documents, 4: Preview
   const [step, setStep] = useState(1)
@@ -190,10 +192,66 @@ export function ApplicantDashboardView({
     setIsSubmitting(false)
   }
 
+  // An offer awaiting the applicant's answer belongs on whichever screen they are looking at.
+  // This view had no counter-offer handling at all, so an applicant who opened their pipeline was
+  // never shown the choice — the decision sat waiting on a screen they were not on.
+  const counterOfferPending =
+    application.counterOfferStatus === 'PENDING' || application.status === 'counter_offer_pending'
+
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
       <div className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden my-8 animate-scaleUp">
-        
+
+        {counterOfferPending && (
+          <div className="border-b border-amber-200 bg-amber-50 p-5 space-y-3">
+            <div>
+              <p className="text-[0.65rem] font-bold uppercase tracking-widest text-amber-700">
+                Your decision is needed
+              </p>
+              <p className="mt-1 text-sm font-bold text-amber-950">
+                The underwriter has revised your offer.
+              </p>
+            </div>
+
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+              <dt className="text-amber-900">Revised amount</dt>
+              <dd className="text-right font-mono font-bold text-amber-950">
+                {formatUGX(application.counterOfferPrincipal ?? application.principal)}
+              </dd>
+              <dt className="text-amber-900">Revised term</dt>
+              <dd className="text-right font-bold text-amber-950">
+                {application.counterOfferTenureMonths ?? application.tenureMonths} months
+              </dd>
+            </dl>
+
+            {application.counterOfferReason && (
+              <p className="text-xs text-amber-900">{application.counterOfferReason}</p>
+            )}
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => onCounterOfferDecision?.('ACCEPT')}
+                className="rounded-lg bg-[#103a27] px-4 py-2 text-xs font-bold text-white cursor-pointer"
+              >
+                Accept revised offer
+              </button>
+              <button
+                type="button"
+                onClick={() => onCounterOfferDecision?.('DECLINE')}
+                className="rounded-lg border border-amber-300 px-4 py-2 text-xs font-bold text-amber-950 cursor-pointer"
+              >
+                Decline
+              </button>
+            </div>
+
+            <p className="text-[0.65rem] text-amber-800">
+              Declining does not end your application &mdash; you may add two more guarantors and have it
+              reconsidered.
+            </p>
+          </div>
+        )}
+
         {/* Top Header */}
         <div className="bg-[#0d2a1c] p-6 text-white relative">
           <div className="flex items-center justify-between">
