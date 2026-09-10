@@ -38,6 +38,15 @@ export function UnderwriterDashboardView({
   onUpdateApplication: (updated: Partial<Application>) => void
   onRouteToCommittee: () => void
 }) {
+  // The terms as the applicant asked for them, captured once. Everything below compares against
+  // this rather than against `application`, because editing the principal field calls
+  // onUpdateApplication and moves `application.principal` to whatever was just typed — so
+  // "is this different from what was requested?" always answered no.
+  const [requestedTerms] = useState(() => ({
+    principal: application.principal,
+    tenureMonths: application.tenureMonths,
+  }))
+
   const [classification, setClassification] = useState(application.applicantType || 'individual')
   const [multiplier, setMultiplier] = useState(application.multiplier || 3)
   const [tenure, setTenure] = useState(application.tenureMonths || 12)
@@ -72,6 +81,14 @@ export function UnderwriterDashboardView({
   const [newGPledged, setNewGPledged] = useState('')
   const [isSigning, setIsSigning] = useState(false)
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null)
+  // Why the underwriter changed the terms. It is the first thing the applicant reads on the
+  // revised offer, and until now nothing on this screen collected it — every counter-offer went
+  // out with the same generic sentence.
+  const [adjustmentReason, setAdjustmentReason] = useState('')
+  // What the applicant was actually sent. Saving a reduced amount used to return silently, so an
+  // underwriter had no way to tell whether the file had gone out for consent or gone nowhere.
+  const [counterOfferSent, setCounterOfferSent] =
+    useState<{ principal: number; tenure: number; reason: string } | null>(null)
 
   // ----------------------------------------------------
   // Guardrail Check Engine Computations
@@ -89,6 +106,15 @@ export function UnderwriterDashboardView({
   const guarantorCoverPassed = totalPledged >= requiredGuarantorCover
 
   const overallPassed = depositMultiplierPassed && oneThirdPayPassed && guarantorCoverPassed
+
+  // Reducing the amount or changing the term turns this into an offer the applicant must accept,
+  // not a decision the desk can make alone. The button says so before it is pressed.
+  const isRevisingTerms =
+    requestedCapital < requestedTerms.principal || tenure !== requestedTerms.tenureMonths
+
+  // An offer already out for consent blocks routing, so say so rather than letting the
+  // underwriter press a button that cannot do anything.
+  const awaitingApplicantConsent = application.counterOfferStatus === 'PENDING'
 
   // Verify Document Action
   async function handleVerifyDoc(slotId: string, status: 'VERIFIED' | 'REJECTED', reason?: string) {
@@ -180,10 +206,31 @@ export function UnderwriterDashboardView({
       netTakeHome: residualNetPay,
       verdict: overallPassed ? 'APPROVED' : 'DECLINED',
       guarantors,
+      adjustmentReason: adjustmentReason.trim() || undefined,
     })
     onUpdateApplication({ ...updatedFields, ...(underwritingResult || {}) })
     setIsSigning(false)
-    if (underwritingResult?.counterOfferStatus === 'PENDING') return
+
+    if (!underwritingResult) {
+      setFeedbackMsg(
+        'The server did not confirm this decision, so nothing has been saved and the file has not moved. ' +
+          'Check the connection and try again.'
+      )
+      return
+    }
+
+    // Reduced terms do not go to the committee — they go to the applicant, and wait there.
+    // Confirming that explicitly is the whole point: QA could not tell that the file had been
+    // sent for consent, because the screen said nothing at all.
+    if (underwritingResult.counterOfferStatus === 'PENDING') {
+      setCounterOfferSent({
+        principal: underwritingResult.counterOfferPrincipal ?? requestedCapital,
+        tenure: underwritingResult.counterOfferTenureMonths ?? tenure,
+        reason: underwritingResult.counterOfferReason || adjustmentReason.trim(),
+      })
+      return
+    }
+
     if (!overallPassed) {
       setFeedbackMsg('This file failed underwriting guardrail checks and cannot proceed to committee. It terminates at the underwriting desk.')
       return
@@ -314,6 +361,41 @@ export function UnderwriterDashboardView({
                   />
                 </div>
               </div>
+
+              {isRevisingTerms && (
+                <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-3.5">
+                  <p className="text-xs font-bold text-amber-950">
+                    These terms differ from what was requested
+                  </p>
+                  <p className="text-[0.7rem] leading-relaxed text-amber-900">
+                    {formatUGX(requestedTerms.principal)} over {requestedTerms.tenureMonths} months becomes{' '}
+                    <strong className="font-mono">{formatUGX(requestedCapital)}</strong> over{' '}
+                    <strong>{tenure} months</strong>. Saving this sends the file to{' '}
+                    {application.fullName} for consent instead of to the committee.
+                  </p>
+                  <label className="block text-[0.65rem] font-bold uppercase text-amber-800">
+                    Reason for the change (shown to the applicant)
+                  </label>
+                  <textarea
+                    value={adjustmentReason}
+                    onChange={(e) => setAdjustmentReason(e.target.value)}
+                    rows={2}
+                    placeholder="e.g. Reduced to stay within 3x the savings anchor."
+                    className="w-full rounded-lg border border-amber-200 bg-white p-2 text-xs focus:border-[#103a27] focus:outline-none"
+                  />
+                </div>
+              )}
+
+              {awaitingApplicantConsent && !counterOfferSent && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3.5">
+                  <p className="text-xs font-bold text-amber-950">Awaiting the applicant's consent</p>
+                  <p className="mt-0.5 text-[0.7rem] text-amber-900">
+                    {formatUGX(application.counterOfferPrincipal ?? application.principal)} over{' '}
+                    {application.counterOfferTenureMonths ?? application.tenureMonths} months has been sent to{' '}
+                    {application.fullName}. This file cannot reach the committee until they answer.
+                  </p>
+                </div>
+              )}
             </CardBody>
           </Card>
 
@@ -499,7 +581,11 @@ export function UnderwriterDashboardView({
                   className="w-full flex items-center justify-center gap-2 rounded-full bg-[#103a27] py-3.5 text-xs font-bold text-white shadow-md hover:bg-[#1a5235] transition-all cursor-pointer"
                 >
                   <Send className="size-3.5" />
-                  {isSigning ? 'Signing & Routing...' : 'Digitally Sign & Route to Committee Board'}
+                  {isSigning
+                    ? 'Saving decision...'
+                    : isRevisingTerms
+                    ? 'Save & Send Revised Offer to Applicant'
+                    : 'Digitally Sign & Route to Committee Board'}
                 </button>
               </div>
             </CardBody>
@@ -507,6 +593,65 @@ export function UnderwriterDashboardView({
         </div>
 
       </div>
+
+      {/* Revised-offer confirmation. QA: "No pop-up confirmation on the Underwriter side stating
+          the application was sent to the Applicant for consent." */}
+      {counterOfferSent && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="revised-offer-sent-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+        >
+          <div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-6 shadow-2xl animate-scaleUp">
+            <div className="flex items-start gap-3">
+              <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-emerald-100">
+                <Clock className="size-5 text-emerald-700" />
+              </span>
+              <div>
+                <h4 id="revised-offer-sent-title" className="font-serif text-base font-bold text-[#103a27]">
+                  Sent to {application.fullName} for consent
+                </h4>
+                <p className="mt-1 text-xs leading-relaxed text-gray-600">
+                  {application.reference} stays at the underwriting desk until the applicant accepts or
+                  declines. It cannot be routed to the committee in the meantime.
+                </p>
+              </div>
+            </div>
+
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 rounded-xl bg-[#f4f5f4] p-3.5 text-xs">
+              <dt className="text-gray-600">Revised amount</dt>
+              <dd className="text-right font-mono font-bold text-[#103a27]">
+                {formatUGX(counterOfferSent.principal)}
+              </dd>
+              <dt className="text-gray-600">Revised term</dt>
+              <dd className="text-right font-bold text-[#103a27]">{counterOfferSent.tenure} months</dd>
+            </dl>
+
+            {counterOfferSent.reason && (
+              <p className="rounded-xl border border-gray-100 bg-white p-3 text-xs text-gray-600">
+                <span className="font-semibold text-gray-800">Reason given: </span>
+                {counterOfferSent.reason}
+              </p>
+            )}
+
+            <p className="text-[0.7rem] text-gray-500">
+              If they decline, the file returns here needing two additional guarantors before it can
+              be reconsidered.
+            </p>
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setCounterOfferSent(null)}
+                className="rounded-full bg-[#103a27] px-5 py-2 text-xs font-bold text-white hover:bg-[#1a5235]"
+              >
+                Understood
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add Guarantor Modal */}
       {showAddGuarantorModal && (

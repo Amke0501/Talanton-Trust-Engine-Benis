@@ -12,7 +12,7 @@ import {
   AlertCircle 
 } from 'lucide-react'
 import type { Application } from '@/lib/talenton-data'
-import { formatUGX } from '@/lib/talenton-data'
+import { evaluateQuorum, terminatesAtUnderwriting, formatUGX } from '@/lib/talenton-data'
 
 export function CommitteeHomeView({
   applications,
@@ -23,18 +23,22 @@ export function CommitteeHomeView({
   onNavigateToApplications: () => void
   onSelectApplication: (app: Application) => void
 }) {
+  // Files that ended at the underwriting desk are not the committee's business, and counting
+  // them here inflated every figure on this page relative to the queue below it.
+  const committeeVisible = applications.filter((a) => !terminatesAtUnderwriting(a))
+
   // Pending applications: in committee stage, or in review with underwriter approval
-  const pendingApps = applications.filter(
+  const pendingApps = committeeVisible.filter(
     (a) => a.stage === 'committee' || (a.stage === 'underwriting' && a.verdict === 'APPROVED')
   )
 
   // Approved applications: committee approved or disbursed
-  const approvedApps = applications.filter(
+  const approvedApps = committeeVisible.filter(
     (a) => a.stage === 'disbursed' || a.status === 'approved' || a.status === 'disbursed'
   )
 
   // Total exposure metrics
-  const totalVerifiedExposure = applications.reduce((acc, app) => acc + (app.principal || 0), 0)
+  const totalVerifiedExposure = committeeVisible.reduce((acc, app) => acc + (app.principal || 0), 0)
   const totalPendingAmount = pendingApps.reduce((acc, app) => acc + (app.principal || 0), 0)
   const totalApprovedAmount = approvedApps.reduce((acc, app) => acc + (app.principal || 0), 0)
 
@@ -134,9 +138,11 @@ export function CommitteeHomeView({
         ) : (
           <div className="grid gap-3">
             {pendingApps.map((app) => {
-              const votes = app.committeeVotes || []
-              const approveCount = votes.filter((v) => v.vote === 'APPROVE').length
-              const totalVotes = votes.length || 5
+              // Progress against the rule that actually governs this file, rather than against a
+              // five-seat board: a small loan needs one approval, a big one needs three including
+              // the Chairperson and Treasurer. "2/5" told a board member nothing about whether
+              // this particular file could move.
+              const quorum = evaluateQuorum(app.committeeVotes || [], app.principal)
 
               return (
                 <div 
@@ -177,8 +183,21 @@ export function CommitteeHomeView({
 
                     <div>
                       <p className="text-[0.65rem] font-bold uppercase tracking-widest text-gray-400">Quorum Progress</p>
-                      <p className="text-xs font-bold text-amber-700 mt-0.5">
-                        {approveCount}/{totalVotes} Approved
+                      <p
+                        className={`text-xs font-bold mt-0.5 ${
+                          quorum.hasChairpersonVeto
+                            ? 'text-rose-700'
+                            : quorum.isQuorumPassed
+                            ? 'text-emerald-700'
+                            : 'text-amber-700'
+                        }`}
+                      >
+                        {quorum.hasChairpersonVeto
+                          ? 'Chairperson veto'
+                          : `${quorum.approvalCount}/${quorum.requiredApprovals} Approved`}
+                      </p>
+                      <p className="text-[0.6rem] text-gray-400 mt-0.5">
+                        {quorum.isBigLoan ? 'Big loan · Chairperson + Treasurer' : 'Small loan'}
                       </p>
                     </div>
 
@@ -219,8 +238,9 @@ export function CommitteeHomeView({
         ) : (
           <div className="grid gap-3">
             {approvedApps.map((app) => {
-              const votes = app.committeeVotes || []
-              const approveCount = votes.filter((v) => v.vote === 'APPROVE').length || 4
+              // No invented tally: an approved file with no recorded votes used to display "4/5",
+              // a quorum figure that was neither true of the file nor the rule in force.
+              const outcome = evaluateQuorum(app.committeeVotes || [], app.principal)
 
               return (
                 <div 
@@ -255,7 +275,7 @@ export function CommitteeHomeView({
                       <p className="text-[0.65rem] font-bold uppercase tracking-widest text-gray-400">Quorum Outcome</p>
                       <span className="inline-flex items-center gap-1 text-[0.65rem] font-bold uppercase text-emerald-800 bg-emerald-100 px-2.5 py-0.5 rounded-full mt-0.5">
                         <ThumbsUp className="size-3 text-emerald-700" />
-                        Quorum Passed ({approveCount}/5)
+                        Quorum Passed ({outcome.approvalCount}/{outcome.requiredApprovals})
                       </span>
                     </div>
 

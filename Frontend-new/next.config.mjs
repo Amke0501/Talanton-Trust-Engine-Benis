@@ -24,6 +24,9 @@ if (!apiUrl) {
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Lets a second build (a smoke test, a preview) write somewhere other than .next, so it does
+  // not fight with a dev server already running from this directory.
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   env: {
     NEXT_PUBLIC_API_URL: apiUrl,
   },

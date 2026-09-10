@@ -21,6 +21,8 @@ public class GuarantorShareLockingService
     /// <returns>Updated list of guarantors with locked shares</returns>
     public static List<GuarantorDto> LockGuarantorShares(List<GuarantorDto> guarantors)
     {
+        var lockedAt = DateTime.UtcNow;
+
         return guarantors.Select(g => new GuarantorDto
         {
             Id = g.Id,
@@ -28,7 +30,13 @@ public class GuarantorShareLockingService
             MemberId = g.MemberId,
             PledgedShares = g.PledgedShares,
             // Deduct pledged shares from available balance
-            AvailableShares = Math.Max(0, g.AvailableShares - g.PledgedShares)
+            AvailableShares = Math.Max(0, g.AvailableShares - g.PledgedShares),
+            // Carry the lock itself, not just its effect on the balance. Rebuilding the row
+            // without these left the caller's copy saying "not locked" about shares it had just
+            // locked — correct again only after a round trip to the database.
+            LockedShares = g.PledgedShares,
+            SharesLockedAt = lockedAt,
+            SharesReleasedAt = null,
         }).ToList();
     }
 
@@ -40,6 +48,8 @@ public class GuarantorShareLockingService
     /// <returns>Updated list of guarantors with unlocked shares</returns>
     public static List<GuarantorDto> UnlockGuarantorShares(List<GuarantorDto> guarantors)
     {
+        var releasedAt = DateTime.UtcNow;
+
         return guarantors.Select(g => new GuarantorDto
         {
             Id = g.Id,
@@ -47,7 +57,11 @@ public class GuarantorShareLockingService
             MemberId = g.MemberId,
             PledgedShares = g.PledgedShares,
             // Re-credit pledged shares back to available balance
-            AvailableShares = g.AvailableShares + g.PledgedShares
+            AvailableShares = g.AvailableShares + g.PledgedShares,
+            LockedShares = 0,
+            SharesLockedAt = g.SharesLockedAt,
+            // Stamped, so a later audit can tell "never locked" from "locked and released".
+            SharesReleasedAt = releasedAt,
         }).ToList();
     }
 

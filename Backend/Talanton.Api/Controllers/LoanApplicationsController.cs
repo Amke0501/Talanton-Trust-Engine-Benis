@@ -161,6 +161,23 @@ public class LoanApplicationsController : ControllerBase
             !string.IsNullOrEmpty(authDto.SecretarySignature)
         );
 
+        if (!authResult.IsAuthorized)
+        {
+            // Forbid() challenges the default authentication scheme; none is registered, so it
+            // cannot produce a clean 403 here. Return the status directly with the reason, so the
+            // caller can show the committee why the release was refused.
+            await _audit.RecordAsync(Services.AuditActions.ReleaseRefused, "LoanApplication", reference,
+                actorName: authDto.RequestorRole,
+                after: $"Refused — {authResult.Reason}",
+                cancellationToken: cancellationToken);
+
+            return StatusCode(StatusCodes.Status403Forbidden, new DisbursementAuthorizationResponseDto
+            {
+                IsAuthorized = false,
+                Reason = authResult.Reason
+            });
+        }
+
         // Step 2a: a member with unpaid invoices does not get funds released.
         var invoiceHold = await GetInvoiceHoldAsync(app.MemberId, cancellationToken);
         if (invoiceHold.IsHeld)
@@ -177,41 +194,47 @@ public class LoanApplicationsController : ControllerBase
             });
         }
 
-        // Step 2b: the SACCO must still be holding enough cash. Authority to release is not the
-        // same as having the money; releasing into an over-extended position is what this stops.
-        var liquidity = await _liquidity.GetStatusForGateAsync(cancellationToken);
-        if (liquidity.IsLocked)
+        // Step 2b: the SACCO must still be holding enough cash, and this file must be the one the
+        // cash reaches. Authority to release is not the same as having the money, and having the
+        // money is not the same as it being this applicant's turn.
+        var gate = await EvaluateCashGateAsync(reference, cancellationToken);
+        if (!gate.CanRelease)
         {
-            await _audit.RecordAsync(Services.AuditActions.ReleaseRefused, "LoanApplication", reference,
-                actorName: authDto.RequestorRole,
-                after: $"Refused — liquidity ratio {liquidity.CurrentLiquidityRatio:0.00} below minimum",
-                cancellationToken: cancellationToken);
+            var authorization = Services.EmergencyOverrideService.Evaluate(
+                authDto.EmergencyFirstSeat, authDto.EmergencySecondSeat, authDto.EmergencyReason);
 
-            return StatusCode(StatusCodes.Status409Conflict, new DisbursementAuthorizationResponseDto
+            var overrideRequested =
+                !string.IsNullOrWhiteSpace(authDto.EmergencyFirstSeat) ||
+                !string.IsNullOrWhiteSpace(authDto.EmergencySecondSeat) ||
+                !string.IsNullOrWhiteSpace(authDto.EmergencyReason);
+
+            if (!authorization.IsAuthorized)
             {
-                IsAuthorized = false,
-                Reason = $"Disbursement is on hold: liquidity ratio is {liquidity.CurrentLiquidityRatio:0.00}, " +
-                         $"below the {Services.LiquidityService.MinimumSafeRatio:0.00} minimum. " +
-                         $"Cash on hand {liquidity.TotalLiquidCash:N0} against {liquidity.TotalPendingLoans:N0} committed; " +
-                         $"shortfall {liquidity.Deficit:N0}."
-            });
-        }
+                // Hold the file rather than dropping it: it keeps its place in the queue and is
+                // shown as "Deferred: awaiting liquidity" until cash recovers.
+                await _loanService.DeferForLiquidityAsync(reference, gate.Reason, cancellationToken);
 
-        if (!authResult.IsAuthorized)
-        {
-            // Forbid() challenges the default authentication scheme; none is registered, so it
-            // cannot produce a clean 403 here. Return the status directly with the reason, so the
-            // caller can show the committee why the release was refused.
-            await _audit.RecordAsync(Services.AuditActions.ReleaseRefused, "LoanApplication", reference,
-                actorName: authDto.RequestorRole,
-                after: $"Refused — {authResult.Reason}",
-                cancellationToken: cancellationToken);
+                await _audit.RecordAsync(Services.AuditActions.ReleaseRefused, "LoanApplication", reference,
+                    actorName: authDto.RequestorRole,
+                    after: $"Refused — {gate.Reason}" +
+                           (overrideRequested ? $" Emergency release also refused: {authorization.Explanation}" : string.Empty),
+                    cancellationToken: cancellationToken);
 
-            return StatusCode(StatusCodes.Status403Forbidden, new DisbursementAuthorizationResponseDto
-            {
-                IsAuthorized = false,
-                Reason = authResult.Reason
-            });
+                return StatusCode(StatusCodes.Status409Conflict, new DisbursementAuthorizationResponseDto
+                {
+                    IsAuthorized = false,
+                    IsDeferredForLiquidity = true,
+                    Reason = gate.Reason +
+                             (overrideRequested
+                                 ? $" The emergency release was also refused: {authorization.Explanation}"
+                                 : $" Two of {string.Join(", ", Services.EmergencyOverrideService.KeyHolderSeats)} may " +
+                                   "jointly authorise an emergency release, with a written reason."),
+                    LiquidityStatus = DescribeLiquidity(gate.Status),
+                });
+            }
+
+            await _loanService.RecordEmergencyOverrideAsync(
+                reference, authorization, gate.Reason, cancellationToken);
         }
 
         // Step 3: Execute disbursement (route to disbursed stage)
@@ -234,6 +257,95 @@ public class LoanApplicationsController : ControllerBase
             UpdatedApplication = updated,
             DisbursementAt = DateTime.UtcNow
         });
+    }
+
+    /// <summary>
+    /// Money received against a disbursed loan. Settling it in full releases the guarantors'
+    /// pledged shares back to them.
+    /// </summary>
+    [HttpPost("{reference}/repayment")]
+    public async Task<ActionResult<LoanApplicationDto>> RecordRepayment(
+        string reference, [FromBody] RecordRepaymentDto dto, CancellationToken cancellationToken)
+    {
+        if (dto.Amount <= 0)
+        {
+            return BadRequest(new { message = "A repayment amount greater than zero is required." });
+        }
+
+        var updated = await _loanService.RecordRepaymentAsync(reference, dto, cancellationToken);
+        return updated == null ? NotFound(new { message = $"Loan application {reference} not found." }) : Ok(updated);
+    }
+
+    /// <summary>
+    /// The cash gate: is the SACCO holding enough, and has the queue reached this file?
+    ///
+    /// Two distinct refusals share one answer here, because to a caller they mean the same thing
+    /// — the money is not available for this file right now — but the reason given to the board
+    /// differs, and the board needs the difference to know whether to wait or to escalate.
+    /// </summary>
+    private async Task<CashGateResult> EvaluateCashGateAsync(string reference, CancellationToken cancellationToken)
+    {
+        var status = await _liquidity.GetStatusForGateAsync(cancellationToken);
+
+        if (!status.IsAvailable)
+        {
+            return new CashGateResult
+            {
+                CanRelease = false,
+                Status = status,
+                Reason = "The SACCO's cash position could not be read, so the release was refused. " +
+                         "Funds are never released against an unverified cash position.",
+            };
+        }
+
+        if (status.IsLocked)
+        {
+            return new CashGateResult
+            {
+                CanRelease = false,
+                Status = status,
+                Reason = $"SYSTEM LOCK: insufficient liquidity buffer. The ratio is " +
+                         $"{status.CurrentLiquidityRatio:0.00} against a {Services.LiquidityService.MinimumSafeRatio:0.00} " +
+                         $"minimum — cash on hand {status.TotalLiquidCash:N0} against {status.TotalPendingLoans:N0} " +
+                         $"committed, a shortfall of {status.Deficit:N0}.",
+            };
+        }
+
+        var position = Services.LiquidityService.EvaluateQueuePosition(status, reference);
+        if (!position.IsReleasable)
+        {
+            var entry = position.Entry!;
+            return new CashGateResult
+            {
+                CanRelease = false,
+                Status = status,
+                Reason = $"Deferred: awaiting liquidity. This file is number {entry.QueuePosition} in the release " +
+                         $"queue; releasing it would take cumulative disbursement to {entry.CumulativeDemand:N0}, " +
+                         $"above the safe cap of {status.MaxSafeDisbursementCap:N0}. Files committed earlier are " +
+                         "released first.",
+            };
+        }
+
+        return new CashGateResult { CanRelease = true, Status = status, Reason = string.Empty };
+    }
+
+    private static object DescribeLiquidity(Services.LiquidityStatus status) => new
+    {
+        status.TotalLiquidCash,
+        status.TotalPendingLoans,
+        status.CurrentLiquidityRatio,
+        status.IsLocked,
+        status.Deficit,
+        status.MaxSafeDisbursementCap,
+        status.IsAvailable,
+        MinimumSafeRatio = Services.LiquidityService.MinimumSafeRatio,
+    };
+
+    private sealed class CashGateResult
+    {
+        public bool CanRelease { get; init; }
+        public string Reason { get; init; } = string.Empty;
+        public Services.LiquidityStatus Status { get; init; } = new();
     }
 
     /// <summary>

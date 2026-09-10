@@ -42,6 +42,35 @@ public class GuarantorShareLockingServiceTests
     }
 
     [Fact]
+    public void Locking_records_the_lock_itself_not_only_its_effect_on_the_balance()
+    {
+        // The caller shows this straight back to the board. Returning a row with the balance
+        // reduced but no lock recorded had the screen say "not locked" about shares it had just
+        // locked, until a round trip to the database corrected it.
+        var locked = GuarantorShareLockingService.LockGuarantorShares(
+            new List<GuarantorDto> { Guarantor("Kato", 5_000_000m, 8_000_000m) });
+
+        Assert.Equal(5_000_000m, locked[0].LockedShares);
+        Assert.NotNull(locked[0].SharesLockedAt);
+        Assert.Null(locked[0].SharesReleasedAt);
+    }
+
+    [Fact]
+    public void Unlocking_clears_the_lock_and_stamps_the_release()
+    {
+        var locked = GuarantorShareLockingService.LockGuarantorShares(
+            new List<GuarantorDto> { Guarantor("Kato", 5_000_000m, 8_000_000m) });
+
+        var released = GuarantorShareLockingService.UnlockGuarantorShares(locked);
+
+        Assert.Equal(0m, released[0].LockedShares);
+        Assert.NotNull(released[0].SharesReleasedAt);
+        // "Never locked" and "locked and released" are different facts, so the original lock
+        // timestamp survives the release.
+        Assert.Equal(locked[0].SharesLockedAt, released[0].SharesLockedAt);
+    }
+
+    [Fact]
     public void A_guarantor_cannot_pledge_more_than_they_have()
     {
         var result = GuarantorShareLockingService.ValidateGuarantorCapacity(

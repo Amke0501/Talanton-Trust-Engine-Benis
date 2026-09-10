@@ -29,6 +29,10 @@ export type ApplicationStatus =
   | 'counter_offer_pending'
   /** Declined a revised offer, but may still be reconsidered if more guarantors are added. */
   | 'awaiting_guarantors'
+  /** Authorised, but the SACCO's cash position will not reach it yet. Keeps its queue place. */
+  | 'deferred_awaiting_liquidity'
+  /** Repaid in full; the guarantors' pledged shares have been released. */
+  | 'completed'
 
 export interface DocumentSlot {
   id: string
@@ -56,6 +60,10 @@ export interface Guarantor {
   memberId: string
   pledgedShares: number
   availableShares?: number
+  /** Shares actually committed against a disbursed loan; zero until release and after repayment. */
+  lockedShares?: number
+  sharesLockedAt?: string
+  sharesReleasedAt?: string
 }
 
 export interface ApplicationDraft {
@@ -159,6 +167,20 @@ export interface Application extends ApplicationDraft {
   counterOfferStatus?: 'NONE' | 'PENDING' | 'ACCEPTED' | 'DECLINED'
   applicantConsentAt?: string
   applicantConsentReceived?: boolean
+  /**
+   * How many *new* guarantors this file still needs before it can be reconsidered. Non-zero only
+   * after a revised offer was declined, so the applicant's screen can act on the state instead of
+   * relying on someone reading the status note.
+   */
+  minimumAdditionalGuarantorsRequired?: number
+  deferredForLiquidityAt?: string
+  deferredForLiquidityReason?: string
+  emergencyOverrideFirstSeat?: string
+  emergencyOverrideSecondSeat?: string
+  emergencyOverrideReason?: string
+  emergencyOverrideAt?: string
+  amountRepaid?: number
+  repaidAt?: string
   appraisalOfficer?: string
   securitySignature?: string
   committeeVotes?: BoardMemberVote[]
@@ -170,6 +192,108 @@ export interface Application extends ApplicationDraft {
   fieldAuditCapacity?: string
   fieldAuditCollateral?: string
   disbursedAt?: string
+}
+
+/**
+ * The founder's committee rule, in one place.
+ *
+ * It lived in three: the committee dashboard had the current size-based rule, while the loan list
+ * and the home view still counted four approvals out of five — a quorum the backend has not
+ * enforced for some time. QA saw the same file described as passed on one screen and pending on
+ * another. Both now call this, and it mirrors QuorumEvaluationService on the server.
+ */
+export const BIG_LOAN_THRESHOLD_UGX = 5_000_000
+
+export interface QuorumOutcome {
+  isQuorumPassed: boolean
+  isBigLoan: boolean
+  requiredApprovals: number
+  approvalCount: number
+  rejectCount: number
+  abstainCount: number
+  hasChairpersonVeto: boolean
+  hasRequiredMembers: boolean
+  reason: string
+}
+
+export function evaluateQuorum(votes: BoardMemberVote[], principal: number): QuorumOutcome {
+  const isBigLoan = principal >= BIG_LOAN_THRESHOLD_UGX
+  const requiredApprovals = isBigLoan ? 3 : 1
+
+  const approvalCount = votes.filter((v) => v.vote === 'APPROVE').length
+  const rejectCount = votes.filter((v) => v.vote === 'REJECT').length
+  const abstainCount = votes.filter((v) => v.vote === 'ABSTAIN' || !v.vote).length
+
+  const votedBy = (role: string, vote: 'APPROVE' | 'REJECT') =>
+    votes.some((v) => v.role === role && v.vote === vote)
+
+  const hasChairpersonVeto = votedBy('Chairperson', 'REJECT')
+  const hasRequiredMembers = votedBy('Chairperson', 'APPROVE') && votedBy('Treasurer', 'APPROVE')
+
+  const base = {
+    isBigLoan,
+    requiredApprovals,
+    approvalCount,
+    rejectCount,
+    abstainCount,
+    hasChairpersonVeto,
+    hasRequiredMembers,
+  }
+
+  if (hasChairpersonVeto) {
+    return {
+      ...base,
+      isQuorumPassed: false,
+      hasRequiredMembers: false,
+      reason: 'Chairperson veto: an absolute rejection, regardless of the other votes.',
+    }
+  }
+
+  if (isBigLoan) {
+    if (approvalCount < requiredApprovals) {
+      return {
+        ...base,
+        isQuorumPassed: false,
+        reason: `Big loan: ${approvalCount} of ${requiredApprovals} approvals, and both the Chairperson and Treasurer must be among them.`,
+      }
+    }
+    if (!hasRequiredMembers) {
+      return {
+        ...base,
+        isQuorumPassed: false,
+        reason: 'Big loan: the Chairperson and the Treasurer must both approve.',
+      }
+    }
+    return {
+      ...base,
+      isQuorumPassed: true,
+      reason: `Big loan approved: ${approvalCount} approvals including the Chairperson and Treasurer.`,
+    }
+  }
+
+  return {
+    ...base,
+    isQuorumPassed: approvalCount >= requiredApprovals,
+    reason:
+      approvalCount >= requiredApprovals
+        ? `Small loan approved: ${approvalCount} approval received.`
+        : `Small loan: one approval required (currently ${approvalCount}).`,
+  }
+}
+
+/**
+ * Whether a file ended at the underwriting desk and must never appear in a committee queue —
+ * either declined on the guardrails, or waiting on replacement guarantors after the applicant
+ * turned down a revised offer.
+ */
+export function terminatesAtUnderwriting(app: Application): boolean {
+  if (app.stage === 'disbursed') return false
+  return (
+    app.verdict === 'DECLINED' ||
+    app.status === 'declined' ||
+    app.status === 'awaiting_guarantors' ||
+    app.counterOfferStatus === 'PENDING'
+  )
 }
 
 export const CLASSIFICATION_LABEL: Record<ApplicantType, string> = {
@@ -472,6 +596,8 @@ export const STATUS_META: Record<
   in_review: { label: 'In review', tone: 'warning' },
   counter_offer_pending: { label: 'Counter-offer', tone: 'warning' },
   awaiting_guarantors: { label: 'More guarantors needed', tone: 'warning' },
+  deferred_awaiting_liquidity: { label: 'Deferred: awaiting liquidity', tone: 'warning' },
+  completed: { label: 'Repaid in full', tone: 'success' },
   approved: { label: 'Approved', tone: 'success' },
   declined: { label: 'Declined', tone: 'destructive' },
   disbursed: { label: 'Disbursed', tone: 'success' },

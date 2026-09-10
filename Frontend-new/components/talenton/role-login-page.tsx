@@ -10,6 +10,7 @@ import {
   ROLE_COOKIE_NAME,
   USER_EMAIL_COOKIE_NAME,
   SEAT_COOKIE_NAME,
+  writeSessionCookie,
   COMMITTEE_SEATS,
   DEFAULT_COMMITTEE_SEAT,
   type CommitteeSeat,
@@ -216,13 +217,16 @@ export function RoleLoginPage({ role }: { role: RoleType }) {
     setError('')
     setLoading(true)
     const resolvedEmail = email || `${role}@talenton.com`
-    document.cookie = `${AUTH_COOKIE_NAME}=1; path=/; samesite=lax`
-    document.cookie = `${ROLE_COOKIE_NAME}=${role}; path=/; samesite=lax`
-    document.cookie = `${USER_EMAIL_COOKIE_NAME}=${encodeURIComponent(resolvedEmail)}; path=/; samesite=lax`
+    // Written with an explicit lifetime — see writeSessionCookie. Without one the browser was
+    // free to drop these before the next request, which the middleware read as "not signed in"
+    // and answered with a redirect to the landing page on the first refresh.
+    writeSessionCookie(AUTH_COOKIE_NAME, '1')
+    writeSessionCookie(ROLE_COOKIE_NAME, role)
+    writeSessionCookie(USER_EMAIL_COOKIE_NAME, encodeURIComponent(resolvedEmail))
     // Committee members share one portal but sit in different seats, and the seat decides whose
     // vote counts toward quorum and who may release funds.
     if (role === 'committee') {
-      document.cookie = `${SEAT_COOKIE_NAME}=${encodeURIComponent(seat)}; path=/; samesite=lax`
+      writeSessionCookie(SEAT_COOKIE_NAME, encodeURIComponent(seat))
     }
     router.replace(`/dashboard/${role}`)
   }

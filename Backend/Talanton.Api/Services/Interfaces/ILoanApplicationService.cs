@@ -1,4 +1,5 @@
 using Talanton.Api.DTOs;
+using Talanton.Api.Services;
 
 namespace Talanton.Api.Services.Interfaces;
 
@@ -13,5 +14,8 @@ public interface ILoanApplicationService
     Task<LoanApplicationDto?> ResubmitWithGuarantorsAsync(string reference, ResubmitWithGuarantorsDto dto, CancellationToken cancellationToken = default);
     Task<LoanApplicationDto?> CastVoteAsync(string reference, CastCommitteeVoteDto voteDto, CancellationToken cancellationToken = default);
     Task<LoanApplicationDto?> RouteStageAsync(string reference, string targetStage, CancellationToken cancellationToken = default);
+    Task<LoanApplicationDto?> RecordRepaymentAsync(string reference, RecordRepaymentDto dto, CancellationToken cancellationToken = default);
+    Task<LoanApplicationDto?> DeferForLiquidityAsync(string reference, string reason, CancellationToken cancellationToken = default);
+    Task<LoanApplicationDto?> RecordEmergencyOverrideAsync(string reference, OverrideAuthorizationResult authorization, string cashPositionSummary, CancellationToken cancellationToken = default);
     Task<IEnumerable<CreditPassportMemberDto>> GetCreditPassportMembersAsync(CancellationToken cancellationToken = default);
 }

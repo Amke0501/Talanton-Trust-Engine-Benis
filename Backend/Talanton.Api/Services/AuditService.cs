@@ -76,4 +76,8 @@ public static class AuditActions
     public const string ResubmittedWithGuarantors = "RESUBMITTED_WITH_GUARANTORS";
     public const string FundsReleased = "FUNDS_RELEASED";
     public const string ReleaseRefused = "RELEASE_REFUSED";
+    public const string DeferredForLiquidity = "DEFERRED_AWAITING_LIQUIDITY";
+    public const string EmergencyOverrideUsed = "EMERGENCY_RELEASE_OVERRIDE";
+    public const string RepaymentRecorded = "REPAYMENT_RECORDED";
+    public const string LoanSettled = "LOAN_SETTLED";
 }

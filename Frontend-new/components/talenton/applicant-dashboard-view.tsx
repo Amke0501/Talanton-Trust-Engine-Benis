@@ -22,9 +22,12 @@ import {
   makeDocumentSlots,
   savingsCap,
   type Application,
+  type Guarantor,
   type ApplicantType,
   type DocumentSlot,
 } from '@/lib/talenton-data'
+
+import { ReplacementGuarantorsPanel } from '@/components/talenton/replacement-guarantors-panel'
 
 export function ApplicantDashboardView({
   application,
@@ -33,13 +36,23 @@ export function ApplicantDashboardView({
   onSaveDraft,
   onClose,
   onCounterOfferDecision,
+  onResubmitWithGuarantors,
+  busyReference,
+  feedback,
 }: {
   application: Application
   onUpdateApplication: (updated: Partial<Application>) => void
   onSubmitToUnderwriter: (appData: Partial<Application>) => Promise<void>
   onSaveDraft?: (appData: Partial<Application>) => Promise<void>
   onClose?: () => void
-  onCounterOfferDecision?: (decision: 'ACCEPT' | 'DECLINE') => Promise<void>
+  /** Takes the reference explicitly, so the answer lands on the file the applicant is looking at. */
+  onCounterOfferDecision?: (reference: string, decision: 'ACCEPT' | 'DECLINE') => Promise<void>
+  onResubmitWithGuarantors?: (
+    reference: string,
+    guarantors: Guarantor[]
+  ) => Promise<{ ok: boolean; reason?: string }>
+  busyReference?: string | null
+  feedback?: { reference: string; tone: 'ok' | 'error'; message: string } | null
 }) {
   // Step indicator state: 1: Basics, 2: Financials, 3: Documents, 4: Preview
   const [step, setStep] = useState(1)
@@ -198,6 +211,16 @@ export function ApplicantDashboardView({
   const counterOfferPending =
     application.counterOfferStatus === 'PENDING' || application.status === 'counter_offer_pending'
 
+  // Declining leaves the file needing replacement guarantors. Until now the applicant was told
+  // that in a sentence and given nowhere to supply them.
+  const needsGuarantors =
+    application.status === 'awaiting_guarantors' ||
+    (application.counterOfferStatus === 'DECLINED' &&
+      (application.minimumAdditionalGuarantorsRequired ?? 0) > 0)
+
+  const isBusy = busyReference === application.reference
+  const viewFeedback = feedback && feedback.reference === application.reference ? feedback : null
+
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
       <div className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden my-8 animate-scaleUp">
@@ -231,24 +254,68 @@ export function ApplicantDashboardView({
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={() => onCounterOfferDecision?.('ACCEPT')}
-                className="rounded-lg bg-[#103a27] px-4 py-2 text-xs font-bold text-white cursor-pointer"
+                disabled={isBusy}
+                onClick={() => onCounterOfferDecision?.(application.reference, 'ACCEPT')}
+                className="rounded-lg bg-[#103a27] px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-[#1a5235] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
               >
-                Accept revised offer
+                {isBusy ? 'Recording…' : 'Accept revised offer'}
               </button>
               <button
                 type="button"
-                onClick={() => onCounterOfferDecision?.('DECLINE')}
-                className="rounded-lg border border-amber-300 px-4 py-2 text-xs font-bold text-amber-950 cursor-pointer"
+                disabled={isBusy}
+                onClick={() => onCounterOfferDecision?.(application.reference, 'DECLINE')}
+                className="rounded-lg border border-amber-300 px-4 py-2 text-xs font-bold text-amber-950 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
               >
                 Decline
               </button>
             </div>
 
             <p className="text-[0.65rem] text-amber-800">
-              Declining does not end your application &mdash; you may add two more guarantors and have it
+              Declining does not end your application &mdash; you may add{' '}
+              {application.minimumAdditionalGuarantorsRequired || 2} more guarantors and have it
               reconsidered.
             </p>
+          </div>
+        )}
+
+        {viewFeedback && (
+          <p
+            role="status"
+            className={`border-b px-5 py-3 text-xs font-semibold ${
+              viewFeedback.tone === 'ok'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                : 'border-rose-200 bg-rose-50 text-rose-900'
+            }`}
+          >
+            {viewFeedback.message}
+          </p>
+        )}
+
+        {application.counterOfferStatus === 'ACCEPTED' && application.applicantConsentAt && (
+          <div className="border-b border-emerald-200 bg-emerald-50 px-5 py-3">
+            <p className="text-xs font-bold text-emerald-950">Revised offer accepted</p>
+            <p className="mt-0.5 text-xs text-emerald-900">
+              Consent recorded on{' '}
+              {new Date(application.applicantConsentAt).toLocaleString('en-GB', {
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+              })}{' '}
+              against <strong className="font-mono">{formatUGX(application.principal)}</strong> over{' '}
+              <strong>{application.tenureMonths} months</strong>.
+            </p>
+          </div>
+        )}
+
+        {needsGuarantors && onResubmitWithGuarantors && (
+          <div className="border-b border-rose-200 p-5">
+            <ReplacementGuarantorsPanel
+              application={application}
+              busy={isBusy}
+              onResubmit={(guarantors) => onResubmitWithGuarantors(application.reference, guarantors)}
+            />
           </div>
         )}
 

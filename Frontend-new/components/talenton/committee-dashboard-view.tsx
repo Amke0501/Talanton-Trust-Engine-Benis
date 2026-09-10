@@ -14,9 +14,11 @@ import {
   XCircle,
   DollarSign,
   Calendar,
+  KeyRound,
   Send
 } from 'lucide-react'
 import {
+  evaluateQuorum,
   formatUGX,
   SEED_PORTFOLIO_LOANS,
   type Application,
@@ -24,29 +26,41 @@ import {
   type PortfolioLoan,
 } from '@/lib/talenton-data'
 import { Card, CardBody } from '@/components/talenton/primitives'
-import { disburseLoan } from '@/lib/api-service'
+import { disburseLoan, type EmergencyRelease } from '@/lib/api-service'
 import { readSeatFromCookie, type CommitteeSeat } from '@/lib/role-access'
 import { LiquidityIndicator } from '@/components/talenton/liquidity-indicator'
 import { GuarantorCoveragePanel } from '@/components/talenton/guarantor-coverage-panel'
+import { EmergencyReleaseDialog } from '@/components/talenton/emergency-release-dialog'
+import { RepaymentPanel } from '@/components/talenton/repayment-panel'
 
 export function CommitteeDashboardView({
   application,
   onCastVote,
+  onRecordRepayment,
   onBack,
 }: {
   application: Application
   onCastVote: (memberRole: string, vote: 'APPROVE' | 'REJECT' | 'ABSTAIN') => void
+  onRecordRepayment?: (
+    reference: string,
+    amount: number,
+    recordedByRole: string
+  ) => Promise<{ ok: boolean; reason?: string }>
   onBack?: () => void
 }) {
-  // Board Member Voting State
+  // The five seats, seeded with no vote. They used to be seeded with three APPROVEs and two
+  // ABSTAINs, which meant a file nobody had voted on opened showing most of a quorum already in
+  // place — and on a small loan, showing quorum passed outright.
   const [boardVotes, setBoardVotes] = useState<BoardMemberVote[]>(
-    application.committeeVotes || [
-      { id: 'v1', name: 'Chairman', role: 'Chairperson', vote: 'APPROVE' },
-      { id: 'v2', name: 'Sec. General', role: 'Risk Head', vote: 'APPROVE' },
-      { id: 'v3', name: 'Mrs. Nabukenya', role: 'Credit Officer', vote: 'APPROVE' },
-      { id: 'v4', name: 'Dr. Ochieng', role: 'Treasurer', vote: 'ABSTAIN' },
-      { id: 'v5', name: 'Eng. Museveni', role: 'Board Member', vote: 'ABSTAIN' },
-    ]
+    application.committeeVotes && application.committeeVotes.length > 0
+      ? application.committeeVotes
+      : [
+          { id: 'v1', name: 'Chairperson', role: 'Chairperson', vote: null },
+          { id: 'v2', name: 'Treasurer', role: 'Treasurer', vote: null },
+          { id: 'v3', name: 'Secretary', role: 'Secretary', vote: null },
+          { id: 'v4', name: 'Credit Officer', role: 'Credit Officer', vote: null },
+          { id: 'v5', name: 'Board Member', role: 'Board Member', vote: null },
+        ]
   )
 
   // Risk figures shown to the board. These were previously literal fallbacks — every file
@@ -76,54 +90,44 @@ export function CommitteeDashboardView({
   useEffect(() => { setSeat(readSeatFromCookie()) }, [])
   const [disburseError, setDisburseError] = useState<string | null>(null)
   const [disbursedSuccess, setDisbursedSuccess] = useState(application.stage === 'disbursed')
+  // A release the cash position will not reach yet is deferred, not refused: the file keeps its
+  // place in the queue, and two key-holding officers may still release it together.
+  const [deferred, setDeferred] = useState<string | null>(
+    application.status === 'deferred_awaiting_liquidity'
+      ? application.deferredForLiquidityReason || application.statusNote
+      : null
+  )
+  const [showEmergencyDialog, setShowEmergencyDialog] = useState(false)
 
-  // ========== NEW: QUORUM LOGIC BASED ON LOAN SIZE ==========
-  const BIG_LOAN_THRESHOLD = 5_000_000; // 5M UGX
-  const isBigLoan = application.principal >= BIG_LOAN_THRESHOLD;
-  const requiredApprovals = isBigLoan ? 3 : 1;
+  // The size-based rule, from the one place the whole app shares with the server.
+  const quorum = evaluateQuorum(boardVotes, application.principal)
+  const {
+    isBigLoan,
+    requiredApprovals,
+    approvalCount: approveCount,
+    rejectCount,
+    abstainCount,
+    hasChairpersonVeto: chairpersonVeto,
+    hasRequiredMembers,
+    isQuorumPassed,
+    reason: quorumReason,
+  } = quorum
 
-  // Count votes
-  const approveCount = boardVotes.filter((v) => v.vote === 'APPROVE').length;
-  const rejectCount = boardVotes.filter((v) => v.vote === 'REJECT').length;
-  const abstainCount = boardVotes.filter((v) => v.vote === 'ABSTAIN' || !v.vote).length;
+  const chairmanApproved = boardVotes.some((v) => v.role === 'Chairperson' && v.vote === 'APPROVE')
+  const treasurerApproved = boardVotes.some((v) => v.role === 'Treasurer' && v.vote === 'APPROVE')
 
-  // Check for Chairperson veto
-  const chairpersonVeto = boardVotes.some(
-    (v) => v.role === 'Chairperson' && v.vote === 'REJECT'
-  );
-
-  // For big loans, check if both Chairman and Treasurer approved
-  const chairmanApproved = boardVotes.some(
-    (v) => v.role === 'Chairperson' && v.vote === 'APPROVE'
-  );
-  const treasurerApproved = boardVotes.some(
-    (v) => v.role === 'Treasurer' && v.vote === 'APPROVE'
-  );
-  const hasRequiredMembers = chairmanApproved && treasurerApproved;
-
-  // Determine quorum status
-  let isQuorumPassed = false;
-  let quorumReason = '';
-
-  if (chairpersonVeto) {
-    isQuorumPassed = false;
-    quorumReason = 'Chairperson Veto: Absolute rejection applied.';
-  } else if (isBigLoan) {
-    isQuorumPassed = approveCount >= requiredApprovals && hasRequiredMembers;
-    if (approveCount < requiredApprovals) {
-      quorumReason = `Big Loan: ${approveCount}/${requiredApprovals} approvals needed. Both Chairman and Treasurer must approve.`;
-    } else if (!hasRequiredMembers) {
-      quorumReason = 'Big Loan: Chairman and Treasurer approval required.';
-    } else {
-      quorumReason = `Big Loan Approved: ${approveCount}/${requiredApprovals} approvals with required members.`;
+  // The tally the parent holds is the server's, so adopt it whenever it changes — otherwise a
+  // vote the server rejected would stay on screen as though it had counted.
+  useEffect(() => {
+    if (application.committeeVotes && application.committeeVotes.length > 0) {
+      setBoardVotes((current) =>
+        current.map((seatRow) => {
+          const recorded = application.committeeVotes!.find((v) => v.role === seatRow.role)
+          return recorded ? { ...seatRow, vote: recorded.vote } : { ...seatRow, vote: null }
+        })
+      )
     }
-  } else {
-    isQuorumPassed = approveCount >= requiredApprovals;
-    quorumReason = isQuorumPassed
-      ? `Small Loan Approved: ${approveCount} approval received.`
-      : `Small Loan: Requires 1 approval (currently ${approveCount}).`;
-  }
-  // ========== END: QUORUM LOGIC ==========
+  }, [application.committeeVotes])
 
   function handleVoteClick(role: string, vote: 'APPROVE' | 'REJECT' | 'ABSTAIN') {
     // A member casts only their own vote. One committee session used to be able to click through
@@ -134,17 +138,22 @@ export function CommitteeDashboardView({
     onCastVote(role, vote)
   }
 
-  async function handleDisburseFunds() {
+  async function handleDisburseFunds(emergency?: EmergencyRelease) {
     setIsDisbursing(true)
     setDisburseError(null)
-    const outcome = await disburseLoan(application.reference, seat ?? '')
+    const outcome = await disburseLoan(application.reference, seat ?? '', emergency)
     setIsDisbursing(false)
 
     if (!outcome.ok) {
       setDisburseError(outcome.reason)
+      // A cash shortfall is a wait, not a rejection — offer the dual-key route rather than
+      // leaving the board with a red message and nothing to do.
+      setDeferred(outcome.deferredForLiquidity ? outcome.reason : null)
       return
     }
 
+    setShowEmergencyDialog(false)
+    setDeferred(null)
     setDisbursedSuccess(true)
     
     // Update local portfolio
@@ -152,7 +161,7 @@ export function CommitteeDashboardView({
       {
         reference: application.reference,
         borrowerName: `${application.fullName} (${application.memberId})`,
-        borrowerMeta: `Authorized by Board Quorum (${approveCount}/5)`,
+        borrowerMeta: `Authorized by Board Quorum (${approveCount}/${requiredApprovals})`,
         type: application.applicantType === 'individual' ? 'Individual' : 'SME',
         principal: application.principal,
         status: 'REPAYING',
@@ -291,7 +300,7 @@ export function CommitteeDashboardView({
                   </p>
                 </div>
                 <span className="rounded-full bg-[#103a27]/10 px-3 py-1 text-xs font-bold text-[#103a27]">
-                  Board Quorum: {approveCount} / {boardVotes.length}
+                  Board Quorum: {approveCount} / {requiredApprovals}
                 </span>
               </div>
 
@@ -372,7 +381,7 @@ export function CommitteeDashboardView({
 
               {/* Cash position and guarantor coverage — both were server-side only until now */}
               <div className="grid gap-4 md:grid-cols-2 mb-5">
-                <LiquidityIndicator />
+                <LiquidityIndicator highlightReference={application.reference} />
                 <div className="rounded-2xl border border-gray-200 bg-white p-4">
                   <p className="text-[0.65rem] font-bold uppercase tracking-widest text-gray-500 mb-3">
                     Guarantor coverage
@@ -387,8 +396,8 @@ export function CommitteeDashboardView({
                   <p className="text-xs font-bold text-white">Committee Quorum Outcome Tracker</p>
                   <p className="text-[0.7rem] text-white/70 mt-0.5">
                     {isBigLoan 
-                      ? `Big Loan (≥5M): Requires ${requiredApprovals}/5 approvals + Chairman & Treasurer approval`
-                      : `Small Loan (<5M): Requires ${requiredApprovals}/5 approval`
+                      ? `Big loan (≥5M): ${requiredApprovals} approvals including the Chairperson and Treasurer`
+                      : `Small loan (<5M): ${requiredApprovals} approval`
                     } • Currently {approveCount} Approvals, {rejectCount} Rejections, {abstainCount} Abstentions
                   </p>
                   {chairpersonVeto && (
@@ -421,7 +430,7 @@ export function CommitteeDashboardView({
                   {isQuorumPassed && !disbursedSuccess && (
                     <button
                       type="button"
-                      onClick={handleDisburseFunds}
+                      onClick={() => handleDisburseFunds()}
                       disabled={isDisbursing}
                       className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-[#0d2a1c] font-bold text-xs shadow-lg transition-all flex items-center gap-1.5 cursor-pointer"
                     >
@@ -441,18 +450,50 @@ export function CommitteeDashboardView({
                 </div>
               </div>
 
-              {disburseError && (
-                <div role="alert" className="mt-3 rounded-xl border border-rose-400/50 bg-rose-950/60 px-4 py-3">
-                  <p className="text-[0.7rem] font-bold uppercase tracking-widest text-rose-300">
+              {disburseError && !deferred && (
+                <div role="alert" className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
+                  <p className="text-[0.7rem] font-bold uppercase tracking-widest text-rose-700">
                     Release blocked
                   </p>
-                  <p className="mt-1 text-xs text-rose-100">{disburseError}</p>
+                  <p className="mt-1 text-xs text-rose-900">{disburseError}</p>
+                </div>
+              )}
+
+              {deferred && !disbursedSuccess && (
+                <div role="alert" className="mt-3 space-y-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
+                  <div>
+                    <p className="text-[0.7rem] font-bold uppercase tracking-widest text-amber-800">
+                      Deferred: awaiting liquidity
+                    </p>
+                    <p className="mt-1 text-xs leading-relaxed text-amber-900">{deferred}</p>
+                    <p className="mt-1.5 text-[0.7rem] text-amber-800">
+                      This file keeps its place in the release queue and goes out automatically once
+                      cash recovers. Files committed earlier are released first.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowEmergencyDialog(true)}
+                    className="flex items-center gap-1.5 rounded-lg border border-rose-300 bg-white px-3.5 py-2 text-xs font-bold text-rose-800 hover:bg-rose-50"
+                  >
+                    <KeyRound className="size-3.5" />
+                    Emergency release (two officers)
+                  </button>
                 </div>
               )}
             </CardBody>
           </Card>
         </div>
       </div>
+
+      {/* Repayment: the workflow that releases the guarantors' shares. */}
+      {(disbursedSuccess || application.stage === 'disbursed') && onRecordRepayment && (
+        <RepaymentPanel
+          application={application}
+          seat={seat}
+          onRecordRepayment={onRecordRepayment}
+        />
+      )}
 
       {/* SECTION 2: LOAN PORTFOLIO & DISBURSEMENT TRACKER */}
       <Card className="border-none shadow-sm rounded-2xl bg-white">
@@ -530,6 +571,19 @@ export function CommitteeDashboardView({
           </div>
         </CardBody>
       </Card>
+
+      {showEmergencyDialog && (
+        <EmergencyReleaseDialog
+          reference={application.reference}
+          shortfallMessage={deferred || 'The cash position will not reach this file yet.'}
+          currentSeat={seat}
+          busy={isDisbursing}
+          onCancel={() => setShowEmergencyDialog(false)}
+          onAuthorize={async (release) => {
+            await handleDisburseFunds(release)
+          }}
+        />
+      )}
     </div>
   )
 }

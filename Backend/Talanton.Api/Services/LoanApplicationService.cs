@@ -10,11 +10,13 @@ public class LoanApplicationService : ILoanApplicationService
 {
     private readonly ApplicationDbContext _context;
     private readonly AuditService _audit;
+    private readonly NotificationService _notify;
 
-    public LoanApplicationService(ApplicationDbContext context, AuditService audit)
+    public LoanApplicationService(ApplicationDbContext context, AuditService audit, NotificationService notify)
     {
         _context = context;
         _audit = audit;
+        _notify = notify;
     }
     private static readonly List<LoanApplicationDto> Applications = new()
     {
@@ -302,36 +304,7 @@ public class LoanApplicationService : ILoanApplicationService
                 }
                 else
                 {
-                    var isSubmitted = app.CurrentStatus.Equals("SUBMITTED", StringComparison.OrdinalIgnoreCase) || app.CurrentStatus.Equals("submitted", StringComparison.OrdinalIgnoreCase);
-                    var dto = new LoanApplicationDto
-                    {
-                        Id = app.Id,
-                        Reference = app.ApplicationNumber,
-                        ApplicantName = app.Applicant?.DisplayName ?? "Amara Trading Ltd",
-                        MemberId = "APP-TEST-001",
-                        ApplicantType = app.Applicant?.ApplicantType ?? "cooperative",
-                        Status = isSubmitted ? "submitted" : app.CurrentStatus.ToLowerInvariant(),
-                        Stage = string.IsNullOrWhiteSpace(app.CurrentStage) ? (isSubmitted ? "verification" : "underwriting") : app.CurrentStage,
-                        Principal = app.PrincipalAmount,
-                        Purpose = app.Purpose,
-                        TenureMonths = app.TermMonths,
-                        SavingsBalance = 2000000m,
-                        MonthlyIncome = 1500000m,
-                        MonthlyDebt = 300000m,
-                        Multiplier = 3.0m,
-                        SubmittedOn = app.SubmittedAt?.ToString("MMM dd, yyyy") ?? app.CreatedAt.ToString("MMM dd, yyyy"),
-                        StatusNote = $"Application {app.ApplicationNumber} submitted. Verification in progress.",
-                        DtiNetRatio = 20.0m,
-                        NetTakeHome = 1200000m,
-                        Verdict = "IN_REVIEW",
-                        CounterOfferPrincipal = app.CounterOfferPrincipalAmount,
-                        CounterOfferTenureMonths = app.CounterOfferTermMonths,
-                        CounterOfferReason = app.CounterOfferReason,
-                        CounterOfferStatus = string.IsNullOrWhiteSpace(app.CounterOfferStatus) ? "NONE" : app.CounterOfferStatus,
-                        ApplicantConsentAt = app.ApplicantConsentAt,
-                        ApplicantConsentReceived = app.ApplicantConsentReceived
-                    };
-
+                    var dto = ToDto(app);
                     await HydrateFromDatabaseAsync(dto, app.Id, cancellationToken);
                     resultList.Add(dto);
                 }
@@ -455,11 +428,33 @@ public class LoanApplicationService : ILoanApplicationService
                 AdministrativeFeeAmount = 50000m,
                 Purpose = dto.Purpose,
                 SubmittedAt = DateTime.UtcNow,
-                CreatedAt = DateTime.UtcNow
+                CreatedAt = DateTime.UtcNow,
+
+                // The figures the applicant declared, kept on the row rather than substituted
+                // with stand-ins on every read. Underwriting starts from what was actually
+                // applied for; a file that reported someone else's savings and income was not a
+                // file anyone could underwrite.
+                MemberId = string.IsNullOrWhiteSpace(dto.MemberId) ? string.Empty : dto.MemberId.Trim(),
+                SavingsBalance = dto.SavingsBalance,
+                MonthlyIncome = dto.MonthlyIncome,
+                MonthlyDebt = dto.MonthlyDebt,
+                Multiplier = dto.Multiplier > 0 ? dto.Multiplier : 3.0m,
+                DtiNetRatio = dto.MonthlyIncome > 0 ? Math.Round((dto.MonthlyDebt / dto.MonthlyIncome) * 100, 1) : 0,
+                NetTakeHome = dto.MonthlyIncome - dto.MonthlyDebt,
+                Verdict = "PENDING",
+                StatusNote = $"Application {refNo} submitted. Verification in progress.",
             };
 
             _context.LoanApplications.Add(entity);
             await _context.SaveChangesAsync(cancellationToken);
+
+            await _notify.RaiseAsync(
+                NotificationAudiences.Underwriter,
+                NotificationEvents.ApplicationSubmitted,
+                $"New application {refNo}",
+                $"{applicantName} submitted {dto.Principal:N0} UGX over {dto.TenureMonths} months for {dto.Purpose}.",
+                refNo,
+                cancellationToken: cancellationToken);
         }
         catch (Exception ex)
         {
@@ -546,25 +541,91 @@ public class LoanApplicationService : ILoanApplicationService
             app.Verdict = "PENDING";
             app.Stage = "underwriting";
             app.Status = "counter_offer_pending";
-            app.StatusNote = $"Revised offer sent to applicant: principal reduced from {originalPrincipal:C} to {dto.RequestedPrincipal:C} and tenure changed from {originalTenure} to {dto.TenureMonths} months. Applicant consent is required before the file can move to committee.";
+            app.StatusNote = $"Revised offer sent to applicant: principal reduced from {originalPrincipal:N0} UGX to {dto.RequestedPrincipal:N0} UGX and tenure changed from {originalTenure} to {dto.TenureMonths} months. Applicant consent is required before the file can move to committee.";
             await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
             await _audit.RecordAsync(AuditActions.CounterOfferMade, "LoanApplication", app.Reference,
                 before: $"principal {originalPrincipal:N0} over {originalTenure} months",
                 after: $"principal {dto.RequestedPrincipal:N0} over {dto.TenureMonths} months",
                 cancellationToken: cancellationToken);
+
+            await _notify.RaiseAsync(
+                NotificationAudiences.Applicant,
+                NotificationEvents.CounterOfferSent,
+                $"Revised offer on {app.Reference}",
+                $"The underwriting desk has revised your request to {dto.RequestedPrincipal:N0} UGX over " +
+                $"{dto.TenureMonths} months. {app.CounterOfferReason} Your acceptance is required before it can " +
+                "go to the committee.",
+                app.Reference, app.MemberId, cancellationToken);
+
+            await _notify.RaiseAsync(
+                NotificationAudiences.Underwriter,
+                NotificationEvents.CounterOfferSent,
+                $"{app.Reference} sent to the applicant for consent",
+                $"{app.ApplicantName} has been asked to accept {dto.RequestedPrincipal:N0} UGX over " +
+                $"{dto.TenureMonths} months. The file stays at the underwriting desk until they answer.",
+                app.Reference, cancellationToken: cancellationToken);
+
             return app;
         }
 
-        app.Verdict = (app.GuardrailDepositMultiplierPassed && app.GuardrailOneThirdPayPassed) ? "APPROVED" : "DECLINED";
-        app.StatusNote = app.Verdict == "APPROVED" 
-            ? $"File {reference} meets all underwriting guardrail checks." 
-            : $"File {reference} is declined. Individual multiplier breach or Payslip take-home deficit.";
+        // All three guardrails count. The verdict used to ignore guarantor cover while the
+        // underwriter's own screen included it, so a file could be shown as a guardrail breach and
+        // still be recorded APPROVED — the two answers disagreed on the same file.
+        app.Verdict = (app.GuardrailDepositMultiplierPassed
+                       && app.GuardrailOneThirdPayPassed
+                       && app.GuardrailGuarantorPassed) ? "APPROVED" : "DECLINED";
+
+        app.StatusNote = app.Verdict == "APPROVED"
+            ? $"File {reference} meets all underwriting guardrail checks."
+            : $"File {reference} is declined. {DescribeGuardrailBreaches(app)}";
 
         await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
         await _audit.RecordAsync(AuditActions.UnderwritingDecided, "LoanApplication", app.Reference,
             after: $"Verdict {app.Verdict}; principal {app.Principal:N0} over {app.TenureMonths} months",
             cancellationToken: cancellationToken);
+
+        if (app.Verdict == "DECLINED")
+        {
+            await _notify.RaiseAsync(
+                NotificationAudiences.Applicant,
+                NotificationEvents.UnderwritingDeclined,
+                $"{app.Reference} declined at underwriting",
+                app.StatusNote,
+                app.Reference, app.MemberId, cancellationToken);
+        }
+
         return app;
+    }
+
+    /// <summary>
+    /// Names the checks that actually failed, rather than listing every possible reason. An
+    /// applicant told "multiplier breach or take-home deficit" cannot tell which applies to them.
+    /// </summary>
+    private static string DescribeGuardrailBreaches(LoanApplicationDto app)
+    {
+        var breaches = new List<string>();
+
+        if (!app.GuardrailDepositMultiplierPassed)
+        {
+            breaches.Add($"the request exceeds {app.Multiplier:0.##}x the savings balance of {app.SavingsBalance:N0} UGX");
+        }
+
+        if (!app.GuardrailOneThirdPayPassed)
+        {
+            breaches.Add($"repayments would leave take-home pay of {app.NetTakeHome:N0} UGX, below the statutory one third");
+        }
+
+        if (!app.GuardrailGuarantorPassed)
+        {
+            var pledged = app.Guarantors.Sum(g => g.PledgedShares);
+            var gap = Math.Max(0, app.Principal - app.SavingsBalance);
+            breaches.Add($"guarantor cover of {pledged:N0} UGX does not reach the uncollateralised gap of {gap:N0} UGX");
+        }
+
+        return breaches.Count == 0
+            ? "No guardrail breach was recorded."
+            : char.ToUpperInvariant(breaches[0][0]) + breaches[0][1..] +
+              (breaches.Count > 1 ? "; " + string.Join("; ", breaches.Skip(1)) : string.Empty) + ".";
     }
 
     public async Task<LoanApplicationDto?> RespondToCounterOfferAsync(string reference, CounterOfferDecisionDto dto, CancellationToken cancellationToken = default)
@@ -605,11 +666,31 @@ public class LoanApplicationService : ILoanApplicationService
             app.Status = "in_review";
             app.Stage = "underwriting";
             app.Verdict = "APPROVED";
-            app.StatusNote = "Applicant accepted the revised offer. Consent has been recorded and the file can proceed to committee review.";
+            app.MinimumAdditionalGuarantorsRequired = 0;
+            app.StatusNote =
+                $"Applicant accepted the revised offer on {app.ApplicantConsentAt:dd MMM yyyy 'at' HH:mm} UTC. " +
+                $"Consent is recorded against {app.Principal:N0} UGX over {app.TenureMonths} months and the file " +
+                "can proceed to committee review.";
             await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
             await _audit.RecordAsync(AuditActions.CounterOfferAnswered, "LoanApplication", app.Reference,
                 after: $"Applicant ACCEPTED: principal {app.Principal:N0} over {app.TenureMonths} months",
                 cancellationToken: cancellationToken);
+
+            await _notify.RaiseAsync(
+                NotificationAudiences.Underwriter,
+                NotificationEvents.CounterOfferAccepted,
+                $"{app.Reference}: revised offer accepted",
+                $"{app.ApplicantName} accepted {app.Principal:N0} UGX over {app.TenureMonths} months. " +
+                "The file is cleared to route to the committee.",
+                app.Reference, cancellationToken: cancellationToken);
+
+            await _notify.RaiseAsync(
+                NotificationAudiences.Applicant,
+                NotificationEvents.CounterOfferAccepted,
+                $"Your acceptance of {app.Reference} is recorded",
+                app.StatusNote,
+                app.Reference, app.MemberId, cancellationToken);
+
             return app;
         }
 
@@ -623,13 +704,31 @@ public class LoanApplicationService : ILoanApplicationService
         app.Status = "awaiting_guarantors";
         app.Stage = "underwriting";
         app.Verdict = "DECLINED";
+        app.MinimumAdditionalGuarantorsRequired = MinimumAdditionalGuarantors;
         app.StatusNote =
-            $"Applicant declined the revised offer. The file can be reconsidered if at least " +
-            $"{MinimumAdditionalGuarantors} additional guarantors are added; otherwise it terminates here.";
+            $"Applicant declined the revised offer. {MinimumAdditionalGuarantors} additional guarantors are " +
+            "required before this file can be reconsidered; without them it terminates at the underwriting desk.";
         await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
         await _audit.RecordAsync(AuditActions.CounterOfferAnswered, "LoanApplication", app.Reference,
             after: "Applicant DECLINED the revised offer",
             cancellationToken: cancellationToken);
+
+        await _notify.RaiseAsync(
+            NotificationAudiences.Applicant,
+            NotificationEvents.GuarantorsRequired,
+            $"{MinimumAdditionalGuarantors} more guarantors needed on {app.Reference}",
+            $"You declined the revised offer. Add {MinimumAdditionalGuarantors} guarantors who are not already " +
+            "on the file and resubmit, and the underwriting desk will look at it again.",
+            app.Reference, app.MemberId, cancellationToken);
+
+        await _notify.RaiseAsync(
+            NotificationAudiences.Underwriter,
+            NotificationEvents.CounterOfferDeclined,
+            $"{app.Reference}: revised offer declined",
+            $"{app.ApplicantName} declined the revised terms. The file stays at the underwriting desk, marked as " +
+            $"needing {MinimumAdditionalGuarantors} additional guarantors.",
+            app.Reference, cancellationToken: cancellationToken);
+
         return app;
     }
 
@@ -671,6 +770,7 @@ public class LoanApplicationService : ILoanApplicationService
             app.StatusNote =
                 $"{MinimumAdditionalGuarantors} additional guarantors are required to reconsider this file. " +
                 $"{additions.Count} new guarantor(s) supplied; guarantors already on the file do not count.";
+            app.MinimumAdditionalGuarantorsRequired = MinimumAdditionalGuarantors - additions.Count;
             return app;
         }
 
@@ -697,6 +797,7 @@ public class LoanApplicationService : ILoanApplicationService
         app.Verdict = "PENDING";
         app.Status = "in_review";
         app.Stage = "underwriting";
+        app.MinimumAdditionalGuarantorsRequired = 0;
         app.StatusNote =
             $"Applicant added {additions.Count} additional guarantors after declining the revised offer. " +
             $"Total pledged is now {totalPledged:N0} against an uncollateralised gap of {uncollateralized:N0}. " +
@@ -707,6 +808,21 @@ public class LoanApplicationService : ILoanApplicationService
             after: $"Added {additions.Count} guarantors ({string.Join(", ", additions.Select(g => g.MemberId))}); " +
                    $"returned to underwriting",
             cancellationToken: cancellationToken);
+
+        await _notify.RaiseAsync(
+            NotificationAudiences.Underwriter,
+            NotificationEvents.ResubmittedWithGuarantors,
+            $"{app.Reference} resubmitted with {additions.Count} more guarantors",
+            $"{app.ApplicantName} added {string.Join(", ", additions.Select(g => $"{g.Name} ({g.MemberId})"))}. " +
+            $"Cover is now {totalPledged:N0} UGX against a gap of {uncollateralized:N0} UGX. Awaiting a fresh decision.",
+            app.Reference, cancellationToken: cancellationToken);
+
+        await _notify.RaiseAsync(
+            NotificationAudiences.Applicant,
+            NotificationEvents.ResubmittedWithGuarantors,
+            $"{app.Reference} is back with the underwriting desk",
+            app.StatusNote,
+            app.Reference, app.MemberId, cancellationToken);
 
         return app;
     }
@@ -813,6 +929,15 @@ public class LoanApplicationService : ILoanApplicationService
             actorName: voteDto.MemberRole,
             after: $"{voteDto.MemberRole} voted {voteDto.Vote}",
             cancellationToken: cancellationToken);
+
+        var quorum = QuorumEvaluationService.EvaluateQuorum(app.CommitteeVotes, app.Principal);
+        await _notify.RaiseAsync(
+            NotificationAudiences.Committee,
+            NotificationEvents.VoteCast,
+            $"{voteDto.MemberRole} voted {voteDto.Vote} on {app.Reference}",
+            quorum.Reason,
+            app.Reference, cancellationToken: cancellationToken);
+
         return app;
     }
 
@@ -897,19 +1022,22 @@ public class LoanApplicationService : ILoanApplicationService
 
         if (targetStage.Equals("committee", StringComparison.OrdinalIgnoreCase))
         {
+            // An applicant who declined a revised offer is waiting on guarantors, not on a
+            // guardrail breach. Both states carry Verdict "DECLINED", so this is checked first —
+            // otherwise the file was correctly blocked but told the wrong story about why.
+            if (app.CounterOfferStatus.Equals("DECLINED", StringComparison.OrdinalIgnoreCase))
+            {
+                app.Status = "awaiting_guarantors";
+                app.Stage = "underwriting";
+                app.MinimumAdditionalGuarantorsRequired = MinimumAdditionalGuarantors;
+                app.StatusNote =
+                    $"File {reference} cannot reach committee: the applicant declined the revised offer and " +
+                    $"{MinimumAdditionalGuarantors} additional guarantors are required before it is reconsidered.";
+                await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
+                return app;
+            }
+
             // Block declined files from reaching committee — verdict is set by UpdateUnderwritingAsync().
-            //
-            // FOLLOW-UP #1 (verdict formula mismatch): The verdict computation in
-            // UpdateUnderwritingAsync (line ~535) only checks GuardrailDepositMultiplierPassed &&
-            // GuardrailOneThirdPayPassed, whereas the frontend (underwriter-dashboard-view.tsx)
-            // also includes GuardrailGuarantorPassed in its overallPassed calculation. This
-            // mismatch should be reconciled in a separate change.
-            //
-            // FOLLOW-UP #2 (StatusNote overlap): When an applicant declines a counter-offer,
-            // both Verdict and CounterOfferStatus are set to "DECLINED". Because this verdict
-            // check fires first, the StatusNote will read "failed underwriting guardrail checks"
-            // rather than the more specific counter-offer message below. The block is correct
-            // either way; only the message is less precise for that path.
             if (app.Verdict.Equals("DECLINED", StringComparison.OrdinalIgnoreCase))
             {
                 app.Status = "declined";
@@ -924,15 +1052,6 @@ public class LoanApplicationService : ILoanApplicationService
                 return app;
             }
 
-            if (app.CounterOfferStatus == "DECLINED")
-            {
-                app.Status = "declined";
-                app.Stage = "underwriting";
-                app.StatusNote = $"File {reference} was declined by the applicant after the counter-offer and cannot bypass consent to reach committee.";
-                await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
-                return app;
-            }
-
             app.Stage = targetStage;
             app.Status = "in_review";
             app.StatusNote = $"File {reference} routed to Committee Board for authorization.";
@@ -940,6 +1059,22 @@ public class LoanApplicationService : ILoanApplicationService
             await _audit.RecordAsync(AuditActions.StageRouted, "LoanApplication", app.Reference,
                 after: "Routed to committee for authorization",
                 cancellationToken: cancellationToken);
+
+            await _notify.RaiseAsync(
+                NotificationAudiences.Committee,
+                NotificationEvents.RoutedToCommittee,
+                $"{app.Reference} is awaiting a board vote",
+                $"{app.ApplicantName} — {app.Principal:N0} UGX over {app.TenureMonths} months. " +
+                $"{(QuorumEvaluationService.IsBigLoan(app.Principal) ? "Big loan: three approvals including the Chairperson and Treasurer." : "Small loan: one approval.")}",
+                app.Reference, cancellationToken: cancellationToken);
+
+            await _notify.RaiseAsync(
+                NotificationAudiences.Applicant,
+                NotificationEvents.RoutedToCommittee,
+                $"{app.Reference} is with the committee",
+                "Underwriting is complete and your file is now with the board for authorisation.",
+                app.Reference, app.MemberId, cancellationToken);
+
             return app;
         }
 
@@ -965,12 +1100,43 @@ public class LoanApplicationService : ILoanApplicationService
 
             app.Stage = "disbursed";
             app.Status = "disbursed";
+            app.DisbursedAt = DateTime.UtcNow;
+            app.DeferredForLiquidityAt = null;
+            app.DeferredForLiquidityReason = null;
             app.StatusNote = $"File {reference} approved by committee and funds released. Loan is now active and in repayment.";
+
+            if (entity is not null)
+            {
+                entity.DisbursedAt = app.DisbursedAt;
+                entity.DeferredForLiquidityAt = null;
+                entity.DeferredForLiquidityReason = null;
+            }
+
             await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
             await _audit.RecordAsync(AuditActions.FundsReleased, "LoanApplication", app.Reference,
                 after: $"Released {app.Principal:N0} over {app.TenureMonths} months; " +
                        $"quorum {quorumResult.ApprovalCount}/{quorumResult.RequiredApprovals}",
                 cancellationToken: cancellationToken);
+
+            await _notify.RaiseAsync(
+                NotificationAudiences.Applicant,
+                NotificationEvents.FundsReleased,
+                $"Funds released on {app.Reference}",
+                $"{app.Principal:N0} UGX has been released over {app.TenureMonths} months. Repayment starts next month.",
+                app.Reference, app.MemberId, cancellationToken);
+
+            if (app.Guarantors.Count > 0)
+            {
+                await _notify.RaiseAsync(
+                    NotificationAudiences.Committee,
+                    NotificationEvents.SharesLocked,
+                    $"Guarantor shares locked on {app.Reference}",
+                    $"{app.Guarantors.Sum(g => g.PledgedShares):N0} UGX of shares across " +
+                    $"{app.Guarantors.Count} guarantor(s) are now committed and cannot back another loan " +
+                    "until this one is repaid.",
+                    app.Reference, cancellationToken: cancellationToken);
+            }
+
             return app;
         }
 
@@ -982,6 +1148,243 @@ public class LoanApplicationService : ILoanApplicationService
 
         await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
         return app;
+    }
+
+    /// <summary>
+    /// Money received against a disbursed loan, and — once it is settled in full — the release of
+    /// the guarantors' shares.
+    ///
+    /// The share-unlock service has existed since the shares were first locked, with nothing ever
+    /// calling it: a guarantor who backed a loan that was repaid years ago still had those shares
+    /// counted as committed, so they could not stand behind anyone else. This is the workflow that
+    /// calls it.
+    /// </summary>
+    public async Task<LoanApplicationDto?> RecordRepaymentAsync(
+        string reference, RecordRepaymentDto dto, CancellationToken cancellationToken = default)
+    {
+        var app = await GetLoanApplicationByRefAsync(reference, cancellationToken);
+        if (app == null) return null;
+
+        if (dto.Amount <= 0)
+        {
+            throw new ArgumentException("Repayment amount must be greater than 0.");
+        }
+
+        if (!app.Stage.Equals("disbursed", StringComparison.OrdinalIgnoreCase))
+        {
+            app.StatusNote = $"File {reference} has not been disbursed, so there is nothing to repay against it.";
+            return app;
+        }
+
+        if (app.RepaidAt is not null)
+        {
+            app.StatusNote = $"Loan {reference} was already settled in full on {app.RepaidAt:dd MMM yyyy}.";
+            return app;
+        }
+
+        var entity = await _context.LoanApplications
+            .FirstOrDefaultAsync(a => a.ApplicationNumber == app.Reference, cancellationToken);
+
+        // Never record more than is owed: an overpayment settles the loan, it does not create a
+        // negative balance that would then be released twice.
+        var outstandingBefore = Math.Max(0, app.Principal - app.AmountRepaid);
+        var applied = Math.Min(dto.Amount, outstandingBefore);
+        app.AmountRepaid += applied;
+        var outstanding = Math.Max(0, app.Principal - app.AmountRepaid);
+        var isSettled = outstanding <= 0;
+
+        if (entity is not null)
+        {
+            entity.AmountRepaid = app.AmountRepaid;
+        }
+
+        if (isSettled)
+        {
+            app.RepaidAt = DateTime.UtcNow;
+            app.Status = "completed";
+            app.StatusNote =
+                $"Loan {reference} is repaid in full ({app.AmountRepaid:N0} UGX). " +
+                $"The shares pledged by {app.Guarantors.Count} guarantor(s) have been released.";
+
+            if (entity is not null)
+            {
+                entity.RepaidAt = app.RepaidAt;
+            }
+
+            if (app.Guarantors.Count > 0)
+            {
+                app.Guarantors = GuarantorShareLockingService.UnlockGuarantorShares(app.Guarantors);
+                await PersistShareReleasesAsync(entity, app.Guarantors, cancellationToken);
+            }
+        }
+        else
+        {
+            app.StatusNote =
+                $"{applied:N0} UGX received against {reference}. " +
+                $"{app.AmountRepaid:N0} UGX repaid of {app.Principal:N0} UGX; {outstanding:N0} UGX outstanding. " +
+                "Guarantor shares stay locked until the balance is cleared.";
+        }
+
+        await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
+
+        await _audit.RecordAsync(
+            isSettled ? AuditActions.LoanSettled : AuditActions.RepaymentRecorded,
+            "LoanApplication", app.Reference,
+            actorName: dto.RecordedByRole,
+            before: $"repaid {app.AmountRepaid - applied:N0} of {app.Principal:N0}",
+            after: isSettled
+                ? $"Settled in full; guarantor shares released ({app.Guarantors.Sum(g => g.PledgedShares):N0})"
+                : $"repaid {app.AmountRepaid:N0} of {app.Principal:N0}; {outstanding:N0} outstanding",
+            cancellationToken: cancellationToken);
+
+        await _notify.RaiseAsync(
+            NotificationAudiences.Applicant,
+            isSettled ? NotificationEvents.LoanSettled : NotificationEvents.RepaymentRecorded,
+            isSettled ? $"{reference} is fully repaid" : $"Repayment received on {reference}",
+            app.StatusNote,
+            app.Reference, app.MemberId, cancellationToken);
+
+        if (isSettled && app.Guarantors.Count > 0)
+        {
+            await _notify.RaiseAsync(
+                NotificationAudiences.Committee,
+                NotificationEvents.SharesReleased,
+                $"Guarantor shares released on {reference}",
+                $"{app.Guarantors.Sum(g => g.PledgedShares):N0} UGX across {app.Guarantors.Count} guarantor(s) " +
+                "is free to back another loan.",
+                app.Reference, cancellationToken: cancellationToken);
+        }
+
+        return app;
+    }
+
+    /// <summary>
+    /// Marks a file as waiting for cash rather than refused. It keeps its place in the release
+    /// queue and continues to count against the liquidity ratio, so the position does not appear
+    /// to improve simply because files are stuck.
+    /// </summary>
+    public async Task<LoanApplicationDto?> DeferForLiquidityAsync(
+        string reference, string reason, CancellationToken cancellationToken = default)
+    {
+        var app = await GetLoanApplicationByRefAsync(reference, cancellationToken);
+        if (app == null) return null;
+
+        var entity = await _context.LoanApplications
+            .FirstOrDefaultAsync(a => a.ApplicationNumber == app.Reference, cancellationToken);
+
+        var alreadyDeferred = app.DeferredForLiquidityAt is not null;
+
+        app.Status = LiquidityService.DeferredStatus;
+        app.Stage = "committee";
+        app.DeferredForLiquidityAt = app.DeferredForLiquidityAt ?? DateTime.UtcNow;
+        app.DeferredForLiquidityReason = reason;
+        app.StatusNote = $"Deferred: awaiting liquidity. {reason}";
+
+        if (entity is not null)
+        {
+            entity.DeferredForLiquidityAt = app.DeferredForLiquidityAt;
+            entity.DeferredForLiquidityReason = reason;
+        }
+
+        await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
+
+        if (!alreadyDeferred)
+        {
+            await _audit.RecordAsync(AuditActions.DeferredForLiquidity, "LoanApplication", app.Reference,
+                after: reason, cancellationToken: cancellationToken);
+
+            await _notify.RaiseForAsync(
+                new[] { NotificationAudiences.Committee, NotificationAudiences.Applicant },
+                NotificationEvents.DeferredForLiquidity,
+                $"{app.Reference} deferred: awaiting liquidity",
+                reason, app.Reference, cancellationToken);
+        }
+
+        return app;
+    }
+
+    /// <summary>
+    /// Records that two officers jointly released a file the liquidity gate had locked. The
+    /// signatures, the reason and the cash position at the time are all written to the file and
+    /// to the audit trail — an override that leaves no trace is indistinguishable from a bug.
+    /// </summary>
+    public async Task<LoanApplicationDto?> RecordEmergencyOverrideAsync(
+        string reference,
+        OverrideAuthorizationResult authorization,
+        string cashPositionSummary,
+        CancellationToken cancellationToken = default)
+    {
+        var app = await GetLoanApplicationByRefAsync(reference, cancellationToken);
+        if (app == null) return null;
+
+        var entity = await _context.LoanApplications
+            .FirstOrDefaultAsync(a => a.ApplicationNumber == app.Reference, cancellationToken);
+
+        app.EmergencyOverrideFirstSeat = authorization.FirstSeat;
+        app.EmergencyOverrideSecondSeat = authorization.SecondSeat;
+        app.EmergencyOverrideReason = authorization.Reason;
+        app.EmergencyOverrideAt = DateTime.UtcNow;
+
+        if (entity is not null)
+        {
+            entity.EmergencyOverrideFirstSeat = authorization.FirstSeat;
+            entity.EmergencyOverrideSecondSeat = authorization.SecondSeat;
+            entity.EmergencyOverrideReason = authorization.Reason;
+            entity.EmergencyOverrideAt = app.EmergencyOverrideAt;
+        }
+
+        await PersistWorkflowFieldsAsync(entity, app, cancellationToken);
+
+        await _audit.RecordAsync(AuditActions.EmergencyOverrideUsed, "LoanApplication", app.Reference,
+            actorName: authorization.FirstSeat,
+            before: cashPositionSummary,
+            after: $"Dual-key release by {authorization.FirstSeat} and {authorization.SecondSeat}: {authorization.Reason}",
+            cancellationToken: cancellationToken);
+
+        await _notify.RaiseAsync(
+            NotificationAudiences.Committee,
+            NotificationEvents.EmergencyOverrideUsed,
+            $"Emergency release used on {app.Reference}",
+            $"{authorization.FirstSeat} and {authorization.SecondSeat} jointly released this file against the " +
+            $"liquidity lock. Reason: {authorization.Reason}. Cash position at the time: {cashPositionSummary}",
+            app.Reference, cancellationToken: cancellationToken);
+
+        return app;
+    }
+
+    /// <summary>
+    /// Clears the locks on a settled loan: the shares go back to the guarantors' free balance and
+    /// the release is stamped, so a later audit can tell "never locked" from "locked and released".
+    /// </summary>
+    private async Task PersistShareReleasesAsync(
+        LoanApplication? entity, List<GuarantorDto> guarantors, CancellationToken cancellationToken)
+    {
+        if (entity is null) return;
+
+        try
+        {
+            var rows = await _context.ApplicationGuarantors
+                .Where(g => g.LoanApplicationId == entity.Id)
+                .ToListAsync(cancellationToken);
+
+            var releasedAt = DateTime.UtcNow;
+            foreach (var guarantor in guarantors)
+            {
+                var row = rows.FirstOrDefault(r => r.MemberId == guarantor.MemberId);
+                if (row is null) continue;
+
+                row.AvailableShares = guarantor.AvailableShares;
+                row.LockedShares = 0;
+                row.SharesReleasedAt = releasedAt;
+            }
+
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ERROR] Could not release guarantor share locks for {entity.ApplicationNumber} " +
+                              $"({ex.GetType().Name}): {ex.Message}. Those shares will still read as committed.");
+        }
     }
 
     /// <summary>
@@ -1039,6 +1442,9 @@ public class LoanApplicationService : ILoanApplicationService
                 MemberId = g.MemberId,
                 PledgedShares = g.PledgedShares,
                 AvailableShares = g.AvailableShares,
+                LockedShares = g.LockedShares,
+                SharesLockedAt = g.SharesLockedAt,
+                SharesReleasedAt = g.SharesReleasedAt,
             }).ToList();
         }
 
@@ -1060,6 +1466,16 @@ public class LoanApplicationService : ILoanApplicationService
         }
     }
 
+    /// <summary>
+    /// Writes the whole workflow state through to the row.
+    ///
+    /// This used to save only the stage, the amounts and the counter-offer, so the verdict, the
+    /// status note and the guardrail results were recomputed as defaults on the next read. That
+    /// is why an applicant who declined a revised offer came back marked simply "IN_REVIEW" with
+    /// "Verification in progress" — the file genuinely was waiting on more guarantors, but
+    /// nothing said so, and a declined verdict could not survive a round trip to block committee
+    /// routing either.
+    /// </summary>
     private async Task PersistWorkflowFieldsAsync(LoanApplication? entity, LoanApplicationDto app, CancellationToken cancellationToken)
     {
         if (entity is null) return;
@@ -1068,6 +1484,24 @@ public class LoanApplicationService : ILoanApplicationService
         entity.CurrentStage = app.Stage;
         entity.PrincipalAmount = app.Principal;
         entity.TermMonths = app.TenureMonths;
+
+        if (!string.IsNullOrWhiteSpace(app.MemberId))
+        {
+            entity.MemberId = app.MemberId;
+        }
+
+        entity.Verdict = string.IsNullOrWhiteSpace(app.Verdict) ? "PENDING" : app.Verdict;
+        entity.StatusNote = app.StatusNote ?? string.Empty;
+        entity.SavingsBalance = app.SavingsBalance;
+        entity.MonthlyIncome = app.MonthlyIncome;
+        entity.MonthlyDebt = app.MonthlyDebt;
+        entity.Multiplier = app.Multiplier;
+        entity.DtiNetRatio = app.DtiNetRatio;
+        entity.NetTakeHome = app.NetTakeHome;
+        entity.GuardrailDepositMultiplierPassed = app.GuardrailDepositMultiplierPassed;
+        entity.GuardrailOneThirdPayPassed = app.GuardrailOneThirdPayPassed;
+        entity.GuardrailGuarantorPassed = app.GuardrailGuarantorPassed;
+
         entity.CounterOfferPrincipalAmount = app.CounterOfferPrincipal;
         entity.CounterOfferTermMonths = app.CounterOfferTenureMonths;
         entity.CounterOfferReason = app.CounterOfferReason;
@@ -1078,18 +1512,76 @@ public class LoanApplicationService : ILoanApplicationService
         await _context.SaveChangesAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// The persisted row as the DTO every screen reads. One place, so a field added to the row
+    /// cannot be shown on a fresh file and silently dropped on a demo one.
+    /// </summary>
+    private static LoanApplicationDto ToDto(LoanApplication entity)
+    {
+        var dto = new LoanApplicationDto
+        {
+            Id = entity.Id,
+            Reference = entity.ApplicationNumber,
+            ApplicantName = entity.Applicant?.DisplayName ?? "Amara Trading Ltd",
+            MemberId = entity.MemberId,
+            ApplicantType = entity.Applicant?.ApplicantType ?? "individual",
+            Purpose = entity.Purpose,
+            SubmittedOn = (entity.SubmittedAt ?? entity.CreatedAt).ToString("MMM dd, yyyy"),
+        };
+
+        return OverlayPersistedWorkflow(dto, entity);
+    }
+
     private static LoanApplicationDto OverlayPersistedWorkflow(LoanApplicationDto dto, LoanApplication entity)
     {
-        dto.Status = entity.CurrentStatus.Equals("SUBMITTED", StringComparison.OrdinalIgnoreCase) ? "submitted" : entity.CurrentStatus.ToLowerInvariant();
+        var isSubmitted = entity.CurrentStatus.Equals("SUBMITTED", StringComparison.OrdinalIgnoreCase);
+
+        dto.Status = isSubmitted ? "submitted" : entity.CurrentStatus.ToLowerInvariant();
         dto.Stage = string.IsNullOrWhiteSpace(entity.CurrentStage) ? dto.Stage : entity.CurrentStage;
         dto.Principal = entity.PrincipalAmount;
         dto.TenureMonths = entity.TermMonths;
+
+        if (!string.IsNullOrWhiteSpace(entity.MemberId))
+        {
+            dto.MemberId = entity.MemberId;
+        }
+
+        dto.Verdict = string.IsNullOrWhiteSpace(entity.Verdict) ? "PENDING" : entity.Verdict;
+        dto.StatusNote = string.IsNullOrWhiteSpace(entity.StatusNote)
+            ? $"Application {entity.ApplicationNumber} submitted. Verification in progress."
+            : entity.StatusNote;
+        dto.SavingsBalance = entity.SavingsBalance;
+        dto.MonthlyIncome = entity.MonthlyIncome;
+        dto.MonthlyDebt = entity.MonthlyDebt;
+        dto.Multiplier = entity.Multiplier > 0 ? entity.Multiplier : 3.0m;
+        dto.DtiNetRatio = entity.DtiNetRatio;
+        dto.NetTakeHome = entity.NetTakeHome;
+        dto.GuardrailDepositMultiplierPassed = entity.GuardrailDepositMultiplierPassed;
+        dto.GuardrailOneThirdPayPassed = entity.GuardrailOneThirdPayPassed;
+        dto.GuardrailGuarantorPassed = entity.GuardrailGuarantorPassed;
+
         dto.CounterOfferPrincipal = entity.CounterOfferPrincipalAmount;
         dto.CounterOfferTenureMonths = entity.CounterOfferTermMonths;
         dto.CounterOfferReason = entity.CounterOfferReason;
         dto.CounterOfferStatus = string.IsNullOrWhiteSpace(entity.CounterOfferStatus) ? "NONE" : entity.CounterOfferStatus;
         dto.ApplicantConsentAt = entity.ApplicantConsentAt;
         dto.ApplicantConsentReceived = entity.ApplicantConsentReceived;
+
+        dto.MinimumAdditionalGuarantorsRequired =
+            dto.CounterOfferStatus.Equals("DECLINED", StringComparison.OrdinalIgnoreCase)
+                ? MinimumAdditionalGuarantors
+                : 0;
+
+        dto.DeferredForLiquidityAt = entity.DeferredForLiquidityAt;
+        dto.DeferredForLiquidityReason = entity.DeferredForLiquidityReason;
+        dto.EmergencyOverrideFirstSeat = entity.EmergencyOverrideFirstSeat;
+        dto.EmergencyOverrideSecondSeat = entity.EmergencyOverrideSecondSeat;
+        dto.EmergencyOverrideReason = entity.EmergencyOverrideReason;
+        dto.EmergencyOverrideAt = entity.EmergencyOverrideAt;
+        dto.AmountRepaid = entity.AmountRepaid;
+        dto.RepaidAt = entity.RepaidAt;
+        dto.DisbursedAt = entity.DisbursedAt;
+
         return dto;
     }
 

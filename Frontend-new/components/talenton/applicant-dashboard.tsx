@@ -18,7 +18,9 @@ import {
   formatUGX,
   STATUS_META,
   type Application,
+  type Guarantor,
 } from '@/lib/talenton-data'
+import { ReplacementGuarantorsPanel } from '@/components/talenton/replacement-guarantors-panel'
 
 export function ApplicantDashboard({
   userName,
@@ -26,12 +28,26 @@ export function ApplicantDashboard({
   onNew,
   onResumeDraft,
   onCounterOfferDecision,
+  onResubmitWithGuarantors,
+  busyReference,
+  feedback,
 }: {
   userName: string
   applications: Application[]
   onNew: () => void
   onResumeDraft?: (app: Application) => void
-  onCounterOfferDecision?: (decision: 'ACCEPT' | 'DECLINE') => Promise<void>
+  /**
+   * The reference is passed explicitly. It used to be omitted, so the handler acted on whichever
+   * application happened to be selected in the parent — usually the first in the list — and
+   * pressing Accept on any other file appeared to do nothing at all.
+   */
+  onCounterOfferDecision?: (reference: string, decision: 'ACCEPT' | 'DECLINE') => Promise<void>
+  onResubmitWithGuarantors?: (
+    reference: string,
+    guarantors: Guarantor[]
+  ) => Promise<{ ok: boolean; reason?: string }>
+  busyReference?: string | null
+  feedback?: { reference: string; tone: 'ok' | 'error'; message: string } | null
 }) {
   const firstName = userName.split(' ')[0] || 'there'
 
@@ -42,6 +58,13 @@ export function ApplicantDashboard({
   const activePipelineApplications = applications.filter(
     (a) => a.status !== 'draft' && a.stage !== 'draft' && a.stage !== 'disbursed'
   )
+
+  function isAwaitingGuarantors(app: Application): boolean {
+    return (
+      app.status === 'awaiting_guarantors' ||
+      (app.counterOfferStatus === 'DECLINED' && (app.minimumAdditionalGuarantorsRequired ?? 0) > 0)
+    )
+  }
 
   // Approved & disbursed loans
   const approvedOrDisbursed = applications.filter(
@@ -189,6 +212,13 @@ export function ApplicantDashboard({
               const isCommittee = app.stage === 'committee'
               const isUnderwriting = app.stage === 'underwriting' || app.stage === 'verification'
               const isCounterOfferPending = app.counterOfferStatus === 'PENDING' || app.status === 'counter_offer_pending'
+              const needsGuarantors = isAwaitingGuarantors(app)
+              // A file that ended at the underwriting desk was still labelled "Stage 3:
+              // Underwriting Risk Audit", which reads as work in progress on a decision that has
+              // already been made.
+              const isDeclined = !needsGuarantors && (app.status === 'declined' || app.verdict === 'DECLINED')
+              const isBusy = busyReference === app.reference
+              const appFeedback = feedback && feedback.reference === app.reference ? feedback : null
 
               return (
                 <div 
@@ -210,9 +240,23 @@ export function ApplicantDashboard({
 
                     <div>
                       <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase ${
-                        isCounterOfferPending ? 'bg-amber-100 text-amber-900' : isCommittee ? 'bg-amber-100 text-amber-900' : 'bg-emerald-100 text-emerald-900'
+                        isCounterOfferPending
+                          ? 'bg-amber-100 text-amber-900'
+                          : needsGuarantors || isDeclined
+                          ? 'bg-rose-100 text-rose-900'
+                          : isCommittee
+                          ? 'bg-amber-100 text-amber-900'
+                          : 'bg-emerald-100 text-emerald-900'
                       }`}>
-                        {isCounterOfferPending ? 'Applicant consent required' : isCommittee ? 'Stage 4: Committee Quorum Vote' : 'Stage 3: Underwriting Risk Audit'}
+                        {isCounterOfferPending
+                          ? 'Applicant consent required'
+                          : needsGuarantors
+                          ? 'Additional guarantors required'
+                          : isDeclined
+                          ? 'Declined at underwriting'
+                          : isCommittee
+                          ? 'Stage 4: Committee Quorum Vote'
+                          : 'Stage 3: Underwriting Risk Audit'}
                       </span>
                     </div>
                   </div>
@@ -225,15 +269,68 @@ export function ApplicantDashboard({
                         {' '}&bull; Tenure: <strong>{app.counterOfferTenureMonths ?? app.tenureMonths} months</strong>
                       </p>
                       {app.counterOfferReason && <p className="text-xs text-amber-900">{app.counterOfferReason}</p>}
+                      <p className="text-[0.7rem] text-amber-800">
+                        Declining keeps the file open, but {app.minimumAdditionalGuarantorsRequired || 2} additional
+                        guarantors will then be required before it can be reconsidered.
+                      </p>
                       <div className="flex flex-wrap gap-2">
-                        <button type="button" onClick={() => onCounterOfferDecision?.('ACCEPT')} className="rounded-lg bg-[#103a27] px-4 py-2 text-xs font-bold text-white">
-                          Accept revised offer
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => onCounterOfferDecision?.(app.reference, 'ACCEPT')}
+                          className="rounded-lg bg-[#103a27] px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-[#1a5235] disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {isBusy ? 'Recording…' : 'Accept revised offer'}
                         </button>
-                        <button type="button" onClick={() => onCounterOfferDecision?.('DECLINE')} className="rounded-lg border border-amber-300 px-4 py-2 text-xs font-bold text-amber-950">
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => onCounterOfferDecision?.(app.reference, 'DECLINE')}
+                          className="rounded-lg border border-amber-300 px-4 py-2 text-xs font-bold text-amber-950 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
                           Decline offer
                         </button>
                       </div>
                     </div>
+                  )}
+
+                  {app.counterOfferStatus === 'ACCEPTED' && app.applicantConsentAt && (
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                      <p className="text-xs font-bold text-emerald-950">Revised offer accepted</p>
+                      <p className="mt-0.5 text-xs text-emerald-900">
+                        Consent recorded on{' '}
+                        {new Date(app.applicantConsentAt).toLocaleString('en-GB', {
+                          day: '2-digit',
+                          month: 'short',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}{' '}
+                        against <strong className="font-mono">{formatUGX(app.principal)}</strong> over{' '}
+                        <strong>{app.tenureMonths} months</strong>.
+                      </p>
+                    </div>
+                  )}
+
+                  {appFeedback && (
+                    <p
+                      role="status"
+                      className={`rounded-xl border px-3.5 py-2.5 text-xs font-semibold ${
+                        appFeedback.tone === 'ok'
+                          ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                          : 'border-rose-200 bg-rose-50 text-rose-900'
+                      }`}
+                    >
+                      {appFeedback.message}
+                    </p>
+                  )}
+
+                  {needsGuarantors && onResubmitWithGuarantors && (
+                    <ReplacementGuarantorsPanel
+                      application={app}
+                      busy={isBusy}
+                      onResubmit={(guarantors) => onResubmitWithGuarantors(app.reference, guarantors)}
+                    />
                   )}
 
                   {/* Note & Status */}

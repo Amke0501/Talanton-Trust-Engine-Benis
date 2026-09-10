@@ -2,9 +2,21 @@ import { NextResponse, type NextRequest } from 'next/server'
 import {
   AUTH_COOKIE_NAME,
   ROLE_COOKIE_NAME,
+  SESSION_MAX_AGE_SECONDS,
   normalizeRole,
   resolveRole,
 } from '@/lib/role-access'
+
+/**
+ * Re-writing the role cookie without a lifetime would downgrade the persistent cookie the login
+ * page set into one the browser may drop, undoing the fix for "refreshing logs you out" the first
+ * time the middleware corrected a role.
+ */
+const ROLE_COOKIE_OPTIONS = {
+  path: '/',
+  sameSite: 'lax',
+  maxAge: SESSION_MAX_AGE_SECONDS,
+} as const
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
@@ -30,10 +42,7 @@ export function middleware(request: NextRequest) {
     url.pathname = `/dashboard/${role}`
     url.search = ''
     const response = NextResponse.redirect(url)
-    response.cookies.set(ROLE_COOKIE_NAME, role, {
-      path: '/',
-      sameSite: 'lax',
-    })
+    response.cookies.set(ROLE_COOKIE_NAME, role, ROLE_COOKIE_OPTIONS)
     return response
   }
 
@@ -51,10 +60,7 @@ export function middleware(request: NextRequest) {
 
   const response = NextResponse.next()
   if (cookieRole !== effectiveRole) {
-    response.cookies.set(ROLE_COOKIE_NAME, effectiveRole, {
-      path: '/',
-      sameSite: 'lax',
-    })
+    response.cookies.set(ROLE_COOKIE_NAME, effectiveRole, ROLE_COOKIE_OPTIONS)
   }
   return response
 }

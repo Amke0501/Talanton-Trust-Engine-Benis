@@ -5,6 +5,14 @@ using Talanton.Api.Repositories.Interfaces;
 using Talanton.Api.Services;
 using Talanton.Api.Services.Interfaces;
 
+// Every figure this API puts in a sentence — "270,000,000 UGX", a ratio of "1.07" — is formatted
+// here and read in Uganda. Left to the host's locale it followed whatever the server happened to
+// be set to, so the same shortfall rendered as "1,07" and "270 000 000" on one machine and
+// "1.07" and "270,000,000" on another. Pin it, so the words a committee reads do not depend on
+// where the container runs.
+System.Globalization.CultureInfo.DefaultThreadCurrentCulture = System.Globalization.CultureInfo.InvariantCulture;
+System.Globalization.CultureInfo.DefaultThreadCurrentUICulture = System.Globalization.CultureInfo.InvariantCulture;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Allowed browser origins come from configuration so that a new frontend deployment
@@ -51,25 +59,45 @@ else if (!string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("D
 Console.WriteLine($"[DEBUG] connectionString present: {!string.IsNullOrWhiteSpace(connectionString)}");
 Console.WriteLine($"[DEBUG] connectionString source: {source}");
 
-if (string.IsNullOrWhiteSpace(connectionString) || HasPlaceholderConnectionString(connectionString))
+// An explicitly requested throwaway database, for running the whole stack on a laptop with no
+// PostgreSQL to hand. It has to be asked for by name — a missing connection string still fails
+// loudly rather than quietly starting on a database that forgets everything on restart, which
+// would be far worse in a deployment than not starting at all.
+var useInMemoryDatabase = string.Equals(
+    FirstNonEmpty(builder.Configuration["USE_INMEMORY_DB"], builder.Configuration["Database:UseInMemory"]),
+    "true", StringComparison.OrdinalIgnoreCase);
+
+if (!useInMemoryDatabase && (string.IsNullOrWhiteSpace(connectionString) || HasPlaceholderConnectionString(connectionString)))
 {
     throw new InvalidOperationException(
-        "No valid PostgreSQL connection string configured. Set SUPABASE_DB_CONNECTION or ConnectionStrings:DefaultConnection.");
+        "No valid PostgreSQL connection string configured. Set SUPABASE_DB_CONNECTION or ConnectionStrings:DefaultConnection. " +
+        "For local development without PostgreSQL, set USE_INMEMORY_DB=true — the data is discarded when the process exits.");
 }
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddControllers();
 
-builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseNpgsql(connectionString, npgsql =>
-        npgsql.EnableRetryOnFailure()));
+if (useInMemoryDatabase)
+{
+    Console.WriteLine("[STARTUP] USE_INMEMORY_DB=true — running on a throwaway in-memory database. " +
+                      "Nothing written here survives the process.");
+    builder.Services.AddDbContext<ApplicationDbContext>(options =>
+        options.UseInMemoryDatabase("talanton-local"));
+}
+else
+{
+    builder.Services.AddDbContext<ApplicationDbContext>(options =>
+        options.UseNpgsql(connectionString, npgsql =>
+            npgsql.EnableRetryOnFailure()));
+}
 
 builder.Services.AddScoped<IApplicantRepository, ApplicantRepository>();
 builder.Services.AddScoped<IApplicantService, ApplicantService>();
 builder.Services.AddScoped<ILoanApplicationService, LoanApplicationService>();
 builder.Services.AddScoped<LiquidityService>();
 builder.Services.AddScoped<AuditService>();
+builder.Services.AddScoped<NotificationService>();
 
 var app = builder.Build();
 
@@ -83,13 +111,21 @@ using (var scope = app.Services.CreateScope())
     var reachable = false;
     try
     {
-        // Open the connection rather than calling CanConnectAsync(): that swallows the
-        // underlying exception and returns a bare false, which says nothing about whether
-        // the string is malformed, the host is unreachable, or TLS failed.
-        await db.Database.OpenConnectionAsync();
-        await db.Database.CloseConnectionAsync();
-        reachable = true;
-        Console.WriteLine("[STARTUP] Database connection: OK");
+        if (useInMemoryDatabase)
+        {
+            // Nothing to connect to — the provider is the process itself.
+            reachable = true;
+        }
+        else
+        {
+            // Open the connection rather than calling CanConnectAsync(): that swallows the
+            // underlying exception and returns a bare false, which says nothing about whether
+            // the string is malformed, the host is unreachable, or TLS failed.
+            await db.Database.OpenConnectionAsync();
+            await db.Database.CloseConnectionAsync();
+            Console.WriteLine("[STARTUP] Database connection: OK");
+            reachable = true;
+        }
     }
     catch (Exception ex)
     {
@@ -105,7 +141,15 @@ using (var scope = app.Services.CreateScope())
                           "rejects the chain and the failure looks identical to an unreachable host");
     }
 
-    if (reachable)
+    if (reachable && useInMemoryDatabase)
+    {
+        // The in-memory provider has no migration history to apply; the schema comes straight
+        // from the model.
+        await db.Database.EnsureCreatedAsync();
+        Console.WriteLine("[STARTUP] In-memory schema created from the model");
+        await LocalDemoSeeder.SeedAsync(db);
+    }
+    else if (reachable)
     {
         try
         {

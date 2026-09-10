@@ -1,6 +1,5 @@
 'use client'
 
-import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import {
   LayoutDashboard,
@@ -17,13 +16,18 @@ const NAV_ITEMS: { id: NavItem; label: string; icon: typeof LayoutDashboard }[] 
   { id: 'creditors',    label: 'Credit Passport',   icon: Users },
 ]
 
+import { NotificationBell } from '@/components/talenton/notification-bell'
+
 export function CommitteeSidebar({
   active = 'home',
   userName = 'Committee',
+  notificationKey,
   onNavigate,
 }: {
   active?: NavItem
   userName?: string
+  /** Narrows alerts to one member or seat; omitted, the whole portal's alerts show. */
+  notificationKey?: string
   onNavigate?: (section: NavItem) => void
 }) {
   const initials = userName
@@ -76,19 +80,25 @@ export function CommitteeSidebar({
           <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[#a4cc44] text-[#0d2a1c] text-xs font-black">
             {initials}
           </span>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-semibold text-white">{userName}</p>
             <p className="text-xs text-white/50">Committee Member</p>
           </div>
+          <NotificationBell role="committee" audienceKey={notificationKey} />
         </div>
 
-        <Link
-          href="/logout"
-          className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-white/50 hover:bg-white/8 hover:text-white/80 transition-colors"
-        >
-          <LogOut className="size-3.5" />
-          Logout
-        </Link>
+        {/* A form, not a Link. Next prefetches links, and a prefetched GET to /logout cleared
+            the session cookies of anyone who merely had this sidebar on screen — which is why
+            the app appeared to log people out when they refreshed. */}
+        <form action="/logout" method="post">
+          <button
+            type="submit"
+            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-white/50 transition-colors hover:bg-white/8 hover:text-white/80"
+          >
+            <LogOut className="size-3.5" />
+            Logout
+          </button>
+        </form>
       </div>
     </aside>
   )

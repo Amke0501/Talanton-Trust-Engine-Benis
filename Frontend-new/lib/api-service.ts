@@ -143,7 +143,26 @@ interface ApiLoanApplication {
   applicantConsentReceived?: boolean
   appraisalOfficer?: string
   securitySignature?: string
-  guarantors?: { id: string; name: string; memberId: string; pledgedShares: number; availableShares: number }[]
+  minimumAdditionalGuarantorsRequired?: number
+  deferredForLiquidityAt?: string
+  deferredForLiquidityReason?: string
+  emergencyOverrideFirstSeat?: string
+  emergencyOverrideSecondSeat?: string
+  emergencyOverrideReason?: string
+  emergencyOverrideAt?: string
+  amountRepaid?: number
+  repaidAt?: string
+  disbursedAt?: string
+  guarantors?: {
+    id: string
+    name: string
+    memberId: string
+    pledgedShares: number
+    availableShares: number
+    lockedShares?: number
+    sharesLockedAt?: string
+    sharesReleasedAt?: string
+  }[]
   committeeVotes?: { memberName: string; memberRole: string; vote: string }[]
 }
 
@@ -180,12 +199,25 @@ function fromApi(a: ApiLoanApplication): Application {
     applicantConsentReceived: a.applicantConsentReceived ?? false,
     appraisalOfficer: a.appraisalOfficer,
     securitySignature: a.securitySignature,
+    minimumAdditionalGuarantorsRequired: a.minimumAdditionalGuarantorsRequired ?? 0,
+    deferredForLiquidityAt: a.deferredForLiquidityAt,
+    deferredForLiquidityReason: a.deferredForLiquidityReason,
+    emergencyOverrideFirstSeat: a.emergencyOverrideFirstSeat,
+    emergencyOverrideSecondSeat: a.emergencyOverrideSecondSeat,
+    emergencyOverrideReason: a.emergencyOverrideReason,
+    emergencyOverrideAt: a.emergencyOverrideAt,
+    amountRepaid: Number(a.amountRepaid) || 0,
+    repaidAt: a.repaidAt,
+    disbursedAt: a.disbursedAt,
     guarantors: (a.guarantors || []).map((g) => ({
       id: g.id,
       name: g.name,
       memberId: g.memberId,
       pledgedShares: Number(g.pledgedShares) || 0,
       availableShares: Number(g.availableShares) || 0,
+      lockedShares: Number(g.lockedShares) || 0,
+      sharesLockedAt: g.sharesLockedAt,
+      sharesReleasedAt: g.sharesReleasedAt,
     })),
     committeeVotes: (a.committeeVotes || []).map((v, i) => ({
       id: `v${i + 1}`,
@@ -608,7 +640,7 @@ export async function updateUnderwritingOverride(
     adjustmentReason?: string
   }
 ): Promise<Application | undefined> {
-  const updatedFromBackend = await requestBackend<Application>(`/api/loanapplications/${encodeURIComponent(reference)}/underwrite`, {
+  const raw = await requestBackend<ApiLoanApplication>(`/api/loanapplications/${encodeURIComponent(reference)}/underwrite`, {
     method: 'PUT',
     body: JSON.stringify({
       applicantType: payload.applicantType,
@@ -621,6 +653,8 @@ export async function updateUnderwritingOverride(
       adjustmentReason: payload.adjustmentReason,
     }),
   })
+
+  const updatedFromBackend = raw ? fromApi(raw) : undefined
 
   memoryApplications = memoryApplications.map((app) => {
     if (app.reference === reference) {
@@ -644,37 +678,58 @@ export async function updateUnderwritingOverride(
         counterOfferTenureMonths: updatedFromBackend?.counterOfferTenureMonths ?? app.counterOfferTenureMonths,
         counterOfferReason: updatedFromBackend?.counterOfferReason ?? app.counterOfferReason,
         applicantConsentReceived: updatedFromBackend?.applicantConsentReceived ?? app.applicantConsentReceived,
+        statusNote: updatedFromBackend?.statusNote ?? app.statusNote,
       }
     }
     return app
   })
 
+  persistLocalState()
   return updatedFromBackend || memoryApplications.find((app) => app.reference === reference)
 }
 
+export type CounterOfferOutcome =
+  | { ok: true; application: Application }
+  | { ok: false; reason: string }
+
+/**
+ * Records the applicant's answer to a revised offer.
+ *
+ * Three things were wrong here and each one on its own was enough to make Accept look dead. The
+ * server's reply was stored as if it were an `Application`, when it is the API's own DTO — so
+ * every screen field read back undefined. The local copy was then overwritten with guesses about
+ * what the server had decided, including marking a decline as `declined` when the file is really
+ * `awaiting_guarantors`. And an unreachable server returned the guesses anyway, so a call that
+ * never arrived looked exactly like one that succeeded.
+ *
+ * Now the reply is mapped like every other application, the server's answer is the only source of
+ * the new state, and a failure is reported as a failure.
+ */
 export async function respondToCounterOffer(
   reference: string,
   decision: 'ACCEPT' | 'DECLINE'
-): Promise<Application | undefined> {
-  const updatedFromBackend = await requestBackend<Application>(`/api/loanapplications/${encodeURIComponent(reference)}/counter-offer`, {
-    method: 'POST',
-    body: JSON.stringify({ decision }),
-  })
+): Promise<CounterOfferOutcome> {
+  const updatedFromBackend = await requestBackend<ApiLoanApplication>(
+    `/api/loanapplications/${encodeURIComponent(reference)}/counter-offer`,
+    { method: 'POST', body: JSON.stringify({ decision }) }
+  )
 
-  let updatedApplication: Application | undefined
-  memoryApplications = memoryApplications.map((app) => {
-    if (app.reference !== reference) return app
-    updatedApplication = {
-      ...app,
-      ...(updatedFromBackend || {}),
-      counterOfferStatus: decision === 'ACCEPT' ? 'ACCEPTED' : 'DECLINED',
-      applicantConsentReceived: decision === 'ACCEPT',
-      status: decision === 'ACCEPT' ? 'in_review' : 'declined',
+  if (!updatedFromBackend) {
+    return {
+      ok: false,
+      reason:
+        getLastBackendFailure() === 'unreachable'
+          ? 'Could not reach the server, so your answer was not recorded. Please try again.'
+          : 'The server did not accept that answer. Please reload the application and try again.',
     }
-    return updatedApplication
-  })
+  }
+
+  const application = fromApi(updatedFromBackend)
+  memoryApplications = memoryApplications.map((app) =>
+    app.reference.toLowerCase() === reference.toLowerCase() ? application : app
+  )
   persistLocalState()
-  return updatedFromBackend || updatedApplication
+  return { ok: true, application }
 }
 
 /** How many new guarantors are needed to have a declined offer reconsidered. */
@@ -689,12 +744,12 @@ export async function resubmitWithGuarantors(
   reference: string,
   guarantors: Guarantor[]
 ): Promise<{ ok: boolean; application?: Application; reason?: string }> {
-  const updated = await requestBackend<Application>(
+  const raw = await requestBackend<ApiLoanApplication>(
     `/api/loanapplications/${encodeURIComponent(reference)}/resubmit-with-guarantors`,
     { method: 'POST', body: JSON.stringify({ guarantors }) }
   )
 
-  if (!updated) {
+  if (!raw) {
     return {
       ok: false,
       reason:
@@ -705,8 +760,11 @@ export async function resubmitWithGuarantors(
   }
 
   // The server reports a shortfall by leaving the file where it was and explaining why.
+  const updated = fromApi(raw)
   const accepted = updated.status === 'in_review'
-  memoryApplications = memoryApplications.map((a) => (a.reference === reference ? { ...a, ...updated } : a))
+  memoryApplications = memoryApplications.map((a) =>
+    a.reference.toLowerCase() === reference.toLowerCase() ? updated : a
+  )
   persistLocalState()
 
   return accepted
@@ -763,22 +821,47 @@ export async function signAndRouteToCommittee(
 // 4. COMMITTEE VOTING & DISBURSEMENT
 // ----------------------------------------------------------------------
 
+export type VoteOutcome =
+  | { ok: true; application: Application }
+  | { ok: false; reason: string }
+
+/**
+ * Records one committee member's vote.
+ *
+ * This never reached the server. It rewrote the browser's own copy of the votes and returned
+ * `true`, so the quorum tracker on screen filled up while the server had no record of a single
+ * ballot — and the server is what the disbursement gate consults. The board could watch "QUORUM
+ * PASSED" appear and then be refused at release for want of approvals, with nothing on either
+ * screen explaining the contradiction. It also meant the audit trail the founder asked for had
+ * nothing in it: no record of who approved what.
+ *
+ * It fails closed. A vote the server did not accept is not a vote, and must not be shown as one.
+ */
 export async function castCommitteeVote(
   reference: string,
   payload: { memberRole: string; vote: 'APPROVE' | 'REJECT' | 'ABSTAIN'; memberName?: string }
-): Promise<boolean> {
-  memoryApplications = memoryApplications.map((app) => {
-    if (app.reference === reference) {
-      const votes = (app.committeeVotes || []).map((v) =>
-        v.role === payload.memberRole ? { ...v, vote: payload.vote } : v
-      )
-      return { ...app, committeeVotes: votes }
-    }
-    return app
-  })
+): Promise<VoteOutcome> {
+  const raw = await requestBackend<ApiLoanApplication>(
+    `/api/loanapplications/${encodeURIComponent(reference)}/vote`,
+    { method: 'POST', body: JSON.stringify({ memberRole: payload.memberRole, vote: payload.vote }) }
+  )
 
+  if (!raw) {
+    return {
+      ok: false,
+      reason:
+        getLastBackendFailure() === 'unreachable'
+          ? `Could not reach the server, so the ${payload.memberRole} vote was NOT recorded.`
+          : `The server did not accept the ${payload.memberRole} vote. It has NOT been recorded.`,
+    }
+  }
+
+  const application = fromApi(raw)
+  memoryApplications = memoryApplications.map((app) =>
+    app.reference.toLowerCase() === reference.toLowerCase() ? application : app
+  )
   persistLocalState()
-  return true
+  return { ok: true, application }
 }
 
 export interface QuorumCheckResult {
@@ -840,7 +923,19 @@ export async function checkQuorumStatus(reference: string): Promise<QuorumCheckR
   }
 }
 
-export type DisbursementOutcome = { ok: boolean; reason: string }
+export type DisbursementOutcome = {
+  ok: boolean
+  reason: string
+  /** True when the release was held for cash rather than refused — the file keeps its queue place. */
+  deferredForLiquidity?: boolean
+}
+
+/** The two signatures and the written reason that together override a liquidity lock. */
+export interface EmergencyRelease {
+  firstSeat: string
+  secondSeat: string
+  reason: string
+}
 
 /**
  * Releases funds for a loan. The server is the authority: it re-checks quorum and then who is
@@ -854,7 +949,8 @@ export type DisbursementOutcome = { ok: boolean; reason: string }
  */
 export async function disburseLoan(
   reference: string,
-  requestorRole: string = 'Treasurer'
+  requestorRole: string = 'Treasurer',
+  emergency?: EmergencyRelease
 ): Promise<DisbursementOutcome> {
   const now = new Date().toISOString()
 
@@ -868,6 +964,9 @@ export async function disburseLoan(
         chairpersonSignature: 'OTP_VERIFIED', // Simulated until real dual-signature capture exists
         secretarySignature: 'OTP_VERIFIED',   // Simulated until real dual-signature capture exists
         disbursementNotes: `Released by ${requestorRole}`,
+        emergencyFirstSeat: emergency?.firstSeat,
+        emergencySecondSeat: emergency?.secondSeat,
+        emergencyReason: emergency?.reason,
       }),
     })
   } catch (err) {
@@ -881,14 +980,32 @@ export async function disburseLoan(
 
   if (!response.ok) {
     let reason = `The server refused this release (${response.status} ${response.statusText}).`
+    let deferredForLiquidity = false
     try {
       const body = await response.json()
       if (body?.reason) reason = body.reason
+      deferredForLiquidity = Boolean(body?.isDeferredForLiquidity)
     } catch {
       /* keep the status-based message */
     }
     console.error(`[API] Disbursement of ${reference} refused: ${reason}`)
-    return { ok: false, reason }
+
+    if (deferredForLiquidity) {
+      // The server has parked the file rather than rejecting it; keep the local copy in step so
+      // the board sees "Deferred: awaiting liquidity" without waiting for a reload.
+      memoryApplications = memoryApplications.map((app) =>
+        app.reference.toLowerCase() === reference.toLowerCase()
+          ? {
+              ...app,
+              status: 'deferred_awaiting_liquidity' as const,
+              statusNote: `Deferred: awaiting liquidity. ${reason}`,
+            }
+          : app
+      )
+      persistLocalState()
+    }
+
+    return { ok: false, reason, deferredForLiquidity }
   }
 
   // Authorized and executed on the server — reflect it locally.
@@ -955,6 +1072,17 @@ export async function fetchGuarantorCoverage(reference: string): Promise<Coverag
   return { state: getLastBackendFailure() === 'rejected' ? 'unknown-file' : 'unavailable' }
 }
 
+/** One committed file's place in the first-in, first-out release queue. */
+export interface LiquidityQueueEntry {
+  reference: string
+  principal: number
+  queuePosition: number
+  queuedAt: string
+  cumulativeDemand: number
+  isWithinSafeCap: boolean
+  status: string
+}
+
 export interface LiquidityStatus {
   totalLiquidCash: number
   totalPendingLoans: number
@@ -963,11 +1091,95 @@ export interface LiquidityStatus {
   deficit: number
   maxSafeDisbursementCap: number
   minimumSafeRatio: number
+  isAvailable?: boolean
+  queue?: LiquidityQueueEntry[]
+  emergencyKeyHolders?: string[]
 }
 
 /** Cash on hand against the principal already committed to files awaiting release. */
 export async function fetchLiquidityStatus(): Promise<LiquidityStatus | undefined> {
   return requestBackend<LiquidityStatus>('/api/liquidity/status', { method: 'GET' })
+}
+
+// ----------------------------------------------------------------------
+// 4c. REPAYMENT & SHARE RELEASE
+// ----------------------------------------------------------------------
+
+/**
+ * Records money received against a disbursed loan. Settling the balance is what releases the
+ * guarantors' shares — the step that had no caller, leaving pledged shares committed forever.
+ */
+export async function recordRepayment(
+  reference: string,
+  amount: number,
+  recordedByRole: string
+): Promise<{ ok: boolean; application?: Application; reason: string }> {
+  const raw = await requestBackend<ApiLoanApplication>(
+    `/api/loanapplications/${encodeURIComponent(reference)}/repayment`,
+    { method: 'POST', body: JSON.stringify({ amount, recordedByRole }) }
+  )
+
+  if (!raw) {
+    return {
+      ok: false,
+      reason:
+        getLastBackendFailure() === 'unreachable'
+          ? 'Could not reach the server, so the repayment was not recorded.'
+          : 'The server did not accept that repayment.',
+    }
+  }
+
+  const application = fromApi(raw)
+  memoryApplications = memoryApplications.map((a) =>
+    a.reference.toLowerCase() === reference.toLowerCase() ? application : a
+  )
+  persistLocalState()
+  return { ok: true, application, reason: application.statusNote }
+}
+
+// ----------------------------------------------------------------------
+// 4d. IN-APP NOTIFICATIONS
+// ----------------------------------------------------------------------
+
+export interface AppNotification {
+  id: string
+  title: string
+  body: string
+  eventType: string
+  reference?: string
+  isRead: boolean
+  createdAt: string
+}
+
+export interface NotificationFeed {
+  audience: string
+  unreadCount: number
+  notifications: AppNotification[]
+}
+
+/**
+ * The alerts for one portal. `key` narrows to a single member or seat; an alert raised without a
+ * key of its own is addressed to everyone in that portal.
+ */
+export async function fetchNotifications(
+  audience: 'applicant' | 'underwriter' | 'committee',
+  key?: string
+): Promise<NotificationFeed | undefined> {
+  const query = new URLSearchParams({ audience })
+  if (key) query.set('key', key)
+  return requestBackend<NotificationFeed>(`/api/notifications?${query.toString()}`, { method: 'GET' })
+}
+
+export async function markNotificationsRead(
+  audience: 'applicant' | 'underwriter' | 'committee',
+  ids: string[]
+): Promise<boolean> {
+  if (ids.length === 0) return true
+  const result = await requestBackend<{ marked: number }>('/api/notifications/mark-read', {
+    method: 'POST',
+    body: JSON.stringify({ audience, ids }),
+  })
+  return result !== undefined
 }
 
 // ----------------------------------------------------------------------

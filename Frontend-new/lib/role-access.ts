@@ -46,6 +46,34 @@ export function readSeatFromCookie(): CommitteeSeat {
   return normalizeSeat(match?.split('=')[1]) ?? DEFAULT_COMMITTEE_SEAT
 }
 
+/**
+ * How long a signed-in session lasts, in seconds.
+ *
+ * The session cookies were written with no lifetime and no Secure flag at all, which made them
+ * session cookies the browser was free to drop — and over HTTPS, a SameSite cookie without
+ * Secure is rejected outright by some browsers. Either way the next request arrived with no
+ * auth cookie, the middleware saw an unauthenticated request and bounced the user to the
+ * landing page: QA saw this as "the app logs you out when you refresh the page".
+ *
+ * Writing an explicit Max-Age, and Secure whenever the page is served over HTTPS, makes the
+ * session survive a reload — and a closed tab — rather than depending on browser policy.
+ */
+export const SESSION_MAX_AGE_SECONDS = 60 * 60 * 8
+
+/** Writes one session cookie so it actually survives a page reload. */
+export function writeSessionCookie(name: string, value: string): void {
+  if (typeof document === 'undefined') return
+  const secure = typeof location !== 'undefined' && location.protocol === 'https:' ? '; secure' : ''
+  document.cookie = `${name}=${value}; path=/; max-age=${SESSION_MAX_AGE_SECONDS}; samesite=lax${secure}`
+}
+
+/** Reads one cookie written by {@link writeSessionCookie}. */
+export function readCookie(name: string): string | null {
+  if (typeof document === 'undefined') return null
+  const match = document.cookie.split('; ').find((c) => c.startsWith(`${name}=`))
+  return match ? decodeURIComponent(match.slice(name.length + 1)) : null
+}
+
 export function normalizeRole(value: string | null | undefined): RoleType | null {
   if (!value) return null
   const lowered = value.toLowerCase()

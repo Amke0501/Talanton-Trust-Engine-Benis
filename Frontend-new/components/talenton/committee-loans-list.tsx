@@ -14,7 +14,7 @@ import {
   Users 
 } from 'lucide-react'
 import type { Application } from '@/lib/talenton-data'
-import { formatUGX } from '@/lib/talenton-data'
+import { formatUGX, evaluateQuorum, terminatesAtUnderwriting } from '@/lib/talenton-data'
 
 export function CommitteeLoansList({
   applications,
@@ -26,12 +26,20 @@ export function CommitteeLoansList({
   const [filter, setFilter] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'DISBURSED'>('ALL')
   const [searchQuery, setSearchQuery] = useState('')
 
-  const filteredApps = applications.filter((app) => {
-    // A file declined at underwriting terminates there. The default "All" tab applied no verdict
-    // filter, so declined files were listed in the committee queue alongside live ones.
-    const isDeclined = app.verdict === 'DECLINED' || app.status === 'declined'
-    if (isDeclined && app.stage !== 'disbursed') return false
+  // Everything the committee may see. Counting is done from this list, never from the raw
+  // `applications` array: the tab counts used to be computed before the declined-file filter, so
+  // "All Files" advertised files the list below deliberately hid, and the count and the list
+  // disagreed about the size of the queue.
+  const committeeVisible = applications.filter((app) => !terminatesAtUnderwriting(app))
 
+  const counts = {
+    ALL: committeeVisible.length,
+    PENDING: committeeVisible.filter((a) => a.stage === 'committee').length,
+    APPROVED: committeeVisible.filter((a) => a.status === 'approved' || a.stage === 'disbursed').length,
+    DISBURSED: committeeVisible.filter((a) => a.stage === 'disbursed').length,
+  }
+
+  const filteredApps = committeeVisible.filter((app) => {
     // Filter status
     if (filter === 'PENDING') {
       if (app.stage !== 'committee' && !(app.stage === 'underwriting' && app.verdict === 'APPROVED')) return false
@@ -85,10 +93,10 @@ export function CommitteeLoansList({
       {/* Filter Tabs */}
       <div className="flex flex-wrap gap-2">
         {[
-          { id: 'ALL', label: `All Files (${applications.length})` },
-          { id: 'PENDING', label: `Awaiting Quorum (${applications.filter(a => a.stage === 'committee').length})` },
-          { id: 'APPROVED', label: `Approved (${applications.filter(a => a.status === 'approved' || a.stage === 'disbursed').length})` },
-          { id: 'DISBURSED', label: `Disbursed (${applications.filter(a => a.stage === 'disbursed').length})` },
+          { id: 'ALL', label: `All Files (${counts.ALL})` },
+          { id: 'PENDING', label: `Awaiting Quorum (${counts.PENDING})` },
+          { id: 'APPROVED', label: `Approved (${counts.APPROVED})` },
+          { id: 'DISBURSED', label: `Disbursed (${counts.DISBURSED})` },
         ].map((tab) => (
           <button
             key={tab.id}
@@ -115,15 +123,17 @@ export function CommitteeLoansList({
       ) : (
         <div className="grid gap-4 mt-2">
           {filteredApps.map((app) => {
-            const votes = app.committeeVotes || [
-              { id: 'v1', name: 'Chairperson', role: 'Chairperson', vote: 'APPROVE' },
-              { id: 'v2', name: 'Risk Head', role: 'Risk Head', vote: 'APPROVE' },
-              { id: 'v3', name: 'Credit Officer', role: 'Credit Officer', vote: 'APPROVE' },
-              { id: 'v4', name: 'Treasurer', role: 'Treasurer', vote: 'ABSTAIN' },
-              { id: 'v5', name: 'Board Member', role: 'Board Member', vote: 'ABSTAIN' },
-            ]
-            const approveCount = votes.filter((v) => v.vote === 'APPROVE').length
-            const isApproved = approveCount >= 4 || app.status === 'approved' || app.stage === 'disbursed'
+            // No invented votes. This list used to fall back to five hardcoded ballots when a file
+            // had none, so an untouched application was displayed as though the board had already
+            // voted on it — three approvals and all.
+            const votes = app.committeeVotes || []
+            // The size-based rule, shared with the committee dashboard and the server: one
+            // approval below 5M; three including the Chairperson and Treasurer at or above it.
+            // This row was still counting a four-out-of-five quorum that no longer exists
+            // anywhere else, so the badge disagreed with the file it sat on.
+            const quorum = evaluateQuorum(votes, app.principal)
+            const approveCount = quorum.approvalCount
+            const isApproved = quorum.isQuorumPassed || app.status === 'approved' || app.stage === 'disbursed'
 
             return (
               <div 
@@ -157,7 +167,7 @@ export function CommitteeLoansList({
                   {/* Middle: Who Has Approved Breakdown */}
                   <div className="flex-1 border-t lg:border-t-0 lg:border-l lg:border-r border-gray-100 pt-4 lg:pt-0 lg:px-6">
                     <p className="text-[0.65rem] font-bold uppercase tracking-widest text-gray-400 mb-2.5">
-                      Board Sign-off Votes ({approveCount}/5 Approved)
+                      Board Sign-off Votes ({approveCount}/{quorum.requiredApprovals} Approved)
                     </p>
                     <div className="flex flex-wrap gap-2">
                       {votes.map((v) => {

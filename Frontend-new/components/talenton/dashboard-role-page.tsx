@@ -7,6 +7,8 @@ import {
   submitOrUpdateApplication,
   signAndRouteToCommittee,
   respondToCounterOffer,
+  resubmitWithGuarantors,
+  recordRepayment,
   castCommitteeVote as apiCastVote,
   fetchUserProfile,
   updateUserProfile,
@@ -15,6 +17,7 @@ import {
   INITIAL_APPLICATION,
   INITIAL_USER_PROFILE,
   type Application,
+  type Guarantor,
   type RoleType,
   type UserProfile,
 } from '@/lib/talenton-data'
@@ -47,6 +50,12 @@ export function DashboardRolePage({ role }: { role: RoleType }) {
   const [activeUnderwriterAudit, setActiveUnderwriterAudit] = useState<boolean>(false)
   const [activeCommitteeReview, setActiveCommitteeReview] = useState<boolean>(false)
   const [userName, setUserName] = useState('Amina K.')
+  // Which file an action is running against, and what the server said about it. Counter-offer
+  // answers used to run silently: no spinner, no confirmation, no error — which is most of why
+  // a working Accept button read as broken.
+  const [busyReference, setBusyReference] = useState<string | null>(null)
+  const [actionFeedback, setActionFeedback] =
+    useState<{ reference: string; tone: 'ok' | 'error'; message: string } | null>(null)
 
   useEffect(() => {
     async function loadData() {
@@ -165,22 +174,118 @@ export function DashboardRolePage({ role }: { role: RoleType }) {
     setActiveNav('applications')
   }
 
-  async function handleCounterOfferDecision(decision: 'ACCEPT' | 'DECLINE') {
-    setLoading(true)
-    const updated = await respondToCounterOffer(application.reference, decision)
-    if (updated) {
-      setApplication(updated)
-      setApplications((prev) => prev.map((item) => item.reference === updated.reference ? updated : item))
+  /**
+   * Records the applicant's answer to a revised offer.
+   *
+   * The reference is a parameter now. It used to read `application.reference` — the file selected
+   * in this component, which on the dashboard list is simply the first one loaded — so pressing
+   * Accept on any other application answered on behalf of a different file, and the row the
+   * applicant had actually clicked never changed.
+   */
+  async function handleCounterOfferDecision(reference: string, decision: 'ACCEPT' | 'DECLINE') {
+    setBusyReference(reference)
+    setActionFeedback(null)
+
+    const outcome = await respondToCounterOffer(reference, decision)
+
+    if (!outcome.ok) {
+      setActionFeedback({ reference, tone: 'error', message: outcome.reason })
+      setBusyReference(null)
+      return
     }
-    setLoading(false)
+
+    const updated = outcome.application
+    setApplications((prev) => prev.map((item) => (item.reference === updated.reference ? updated : item)))
+    if (application.reference === updated.reference) {
+      setApplication(updated)
+    }
+    setActionFeedback({
+      reference,
+      tone: 'ok',
+      message:
+        decision === 'ACCEPT'
+          ? `Your acceptance was recorded${
+              updated.applicantConsentAt
+                ? ` on ${new Date(updated.applicantConsentAt).toLocaleString('en-GB', {
+                    day: '2-digit',
+                    month: 'short',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}`
+                : ''
+            }. The file can now go to the committee.`
+          : updated.statusNote,
+    })
+    setBusyReference(null)
   }
 
+  /** Reopens a declined file on the strength of guarantors who are new to it. */
+  async function handleResubmitWithGuarantors(reference: string, guarantors: Guarantor[]) {
+    setBusyReference(reference)
+    setActionFeedback(null)
+
+    const outcome = await resubmitWithGuarantors(reference, guarantors)
+
+    if (outcome.application) {
+      const updated = outcome.application
+      setApplications((prev) => prev.map((item) => (item.reference === reference ? updated : item)))
+      if (application.reference === reference) {
+        setApplication(updated)
+      }
+    }
+
+    setActionFeedback({
+      reference,
+      tone: outcome.ok ? 'ok' : 'error',
+      message: outcome.ok
+        ? outcome.application?.statusNote ||
+          'Returned to the underwriting desk with the additional guarantors.'
+        : outcome.reason || 'The application was not resubmitted.',
+    })
+    setBusyReference(null)
+    return { ok: outcome.ok, reason: outcome.reason }
+  }
+
+  /** Money received against a disbursed loan; settling it releases the guarantors' shares. */
+  async function handleRecordRepayment(reference: string, amount: number, recordedByRole: string) {
+    const outcome = await recordRepayment(reference, amount, recordedByRole)
+    if (outcome.application) {
+      const updated = outcome.application
+      setApplications((prev) => prev.map((item) => (item.reference === reference ? updated : item)))
+      if (application.reference === reference) {
+        setApplication(updated)
+      }
+    }
+    return { ok: outcome.ok, reason: outcome.reason }
+  }
+
+  /**
+   * Casts one committee vote and adopts the server's tally.
+   *
+   * The optimistic update stays — the button should respond immediately — but the server's answer
+   * replaces it, and a refusal rolls it back. Showing a vote the server rejected as though it had
+   * counted is how a board reaches "quorum passed" on a file the release gate will refuse.
+   */
   async function handleCastVote(memberRole: string, vote: 'APPROVE' | 'REJECT' | 'ABSTAIN') {
-    const updatedVotes = (application.committeeVotes || []).map((v) =>
-      v.role === memberRole ? { ...v, vote } : v
-    )
-    setApplication((prev) => ({ ...prev, committeeVotes: updatedVotes }))
-    await apiCastVote(application.reference, { memberRole, vote })
+    const reference = application.reference
+    const previousVotes = application.committeeVotes
+    const optimistic = (previousVotes || []).map((v) => (v.role === memberRole ? { ...v, vote } : v))
+    setApplication((prev) => ({ ...prev, committeeVotes: optimistic }))
+
+    const outcome = await apiCastVote(reference, { memberRole, vote })
+
+    if (!outcome.ok) {
+      setApplication((prev) =>
+        prev.reference === reference ? { ...prev, committeeVotes: previousVotes } : prev
+      )
+      setActionFeedback({ reference, tone: 'error', message: outcome.reason })
+      return
+    }
+
+    const updated = outcome.application
+    setApplications((prev) => prev.map((item) => (item.reference === reference ? updated : item)))
+    setApplication((prev) => (prev.reference === reference ? updated : prev))
   }
 
   function handleNavNavigate(item: NavItem) {
@@ -260,6 +365,9 @@ export function DashboardRolePage({ role }: { role: RoleType }) {
           onSaveDraft={handleSaveDraft}
           onClose={() => setActiveSection('applicant-dashboard')}
           onCounterOfferDecision={handleCounterOfferDecision}
+          onResubmitWithGuarantors={handleResubmitWithGuarantors}
+          busyReference={busyReference}
+          feedback={actionFeedback}
         />
       )
     }
@@ -273,6 +381,7 @@ export function DashboardRolePage({ role }: { role: RoleType }) {
         <ApplicantSidebar
           active={activeSection}
           userName={userName}
+          notificationKey={userProfile.memberId}
           onNavigate={setActiveSection}
         />
 
@@ -294,6 +403,9 @@ export function DashboardRolePage({ role }: { role: RoleType }) {
                   setActiveSection('pipeline')
                 }}
                 onCounterOfferDecision={handleCounterOfferDecision}
+                onResubmitWithGuarantors={handleResubmitWithGuarantors}
+                busyReference={busyReference}
+                feedback={actionFeedback}
               />
             ) : activeSection === 'loan-applications' ? (
               <LoanApplicationsList
@@ -418,6 +530,7 @@ export function DashboardRolePage({ role }: { role: RoleType }) {
               <CommitteeDashboardView
                 application={application}
                 onCastVote={handleCastVote}
+                onRecordRepayment={handleRecordRepayment}
                 onBack={() => setActiveCommitteeReview(false)}
               />
             )}

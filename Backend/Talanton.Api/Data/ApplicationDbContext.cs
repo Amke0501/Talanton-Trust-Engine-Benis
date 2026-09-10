@@ -61,6 +61,9 @@ public class ApplicationDbContext : DbContext
     // Member invoices
     public DbSet<Invoice> Invoices { get; set; }
 
+    // In-app alerts
+    public DbSet<Notification> Notifications { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -136,5 +139,11 @@ public class ApplicationDbContext : DbContext
         modelBuilder.Entity<Invoice>().HasIndex(i => new { i.MemberId, i.Status });
 
         modelBuilder.Entity<Invoice>().HasIndex(i => i.InvoiceNumber).IsUnique();
+
+        // Every portal reads its own unread alerts on load, newest first.
+        modelBuilder.Entity<Notification>().HasIndex(n => new { n.Audience, n.CreatedAt });
+
+        // The applicant's own files are looked up by membership number.
+        modelBuilder.Entity<LoanApplication>().HasIndex(la => la.MemberId);
     }
 }
