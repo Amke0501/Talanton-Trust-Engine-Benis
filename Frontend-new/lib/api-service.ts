@@ -13,13 +13,14 @@ import {
   type BoardMemberVote,
 } from './talenton-data'
 import { getSupabase, isSupabaseConfigured } from './supabase'
+import { getAccessToken } from './auth'
 
 const BACKEND_API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5195'
 
 /** Why the last backend call did not return data. Callers that must fail closed should
  *  check this rather than treating `undefined` as "the server had nothing to say" — a
  *  rejection and an unreachable server are very different answers. */
-export type BackendFailure = 'rejected' | 'unreachable' | null
+export type BackendFailure = 'rejected' | 'unreachable' | 'unauthenticated' | null
 let lastBackendFailure: BackendFailure = null
 export function getLastBackendFailure(): BackendFailure {
   return lastBackendFailure
@@ -37,10 +38,19 @@ async function requestBackend<T>(path: string, options: RequestInit): Promise<T 
   const method = (options.method || 'GET').toUpperCase()
   const retryable = method === 'GET'
 
+  // The API refuses anything without a verified login, so the session token goes on every call.
+  // It is read per request rather than captured once: Supabase rotates these hourly and refreshes
+  // in the background, so a cached copy goes stale and every call starts failing at once.
+  const token = await getAccessToken()
+
   const send = () =>
     fetch(url, {
       ...options,
-      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(options.headers || {}),
+      },
     })
 
   try {
@@ -53,6 +63,15 @@ async function requestBackend<T>(path: string, options: RequestInit): Promise<T 
       await new Promise((resolve) => setTimeout(resolve, WAKE_RETRY_DELAY_MS))
       response = await send()
     }
+    if (response.status === 401) {
+      lastBackendFailure = 'unauthenticated'
+      console.error(
+        `[API] ${method} ${path} was refused: no valid session. The sign-in may have expired — ` +
+          `sign in again.`
+      )
+      return undefined
+    }
+
     if (!response.ok) {
       lastBackendFailure = 'rejected'
       const body = await response.text().catch(() => '')
@@ -843,7 +862,9 @@ export async function castCommitteeVote(
 ): Promise<VoteOutcome> {
   const raw = await requestBackend<ApiLoanApplication>(
     `/api/loanapplications/${encodeURIComponent(reference)}/vote`,
-    { method: 'POST', body: JSON.stringify({ memberRole: payload.memberRole, vote: payload.vote }) }
+    // memberRole is omitted for the same reason: a member casts their own vote, and the server
+    // decides which seat that is.
+    { method: 'POST', body: JSON.stringify({ vote: payload.vote }) }
   )
 
   if (!raw) {
@@ -954,16 +975,23 @@ export async function disburseLoan(
 ): Promise<DisbursementOutcome> {
   const now = new Date().toISOString()
 
+  const token = await getAccessToken()
+
   let response: Response
   try {
     response = await fetch(`${BACKEND_API_BASE_URL}/api/loanapplications/${reference}/disburse`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify({
-        requestorRole,
+        // requestorRole is deliberately omitted: the server takes the releasing officer from the
+        // signed-in session. Sending it here achieved nothing except letting the browser claim an
+        // authority it did not hold.
         chairpersonSignature: 'OTP_VERIFIED', // Simulated until real dual-signature capture exists
         secretarySignature: 'OTP_VERIFIED',   // Simulated until real dual-signature capture exists
-        disbursementNotes: `Released by ${requestorRole}`,
+        disbursementNotes: `Released by ${requestorRole || 'the signed-in officer'}`,
         emergencyFirstSeat: emergency?.firstSeat,
         emergencySecondSeat: emergency?.secondSeat,
         emergencyReason: emergency?.reason,

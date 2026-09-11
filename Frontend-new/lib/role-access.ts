@@ -39,7 +39,13 @@ export function normalizeSeat(value: string | null | undefined): CommitteeSeat |
   return COMMITTEE_SEATS.find((seat) => seat.toLowerCase() === decoded) ?? null
 }
 
-/** Reads the signed-in committee seat from the browser's cookies. */
+/**
+ * Reads the signed-in committee seat from the browser's cookies.
+ *
+ * This is for display only — showing a member which seat they are voting from. The server never
+ * trusts it: it resolves the seat from the account behind the session token, so a tampered cookie
+ * changes what the screen says and nothing about what the SACCO will allow.
+ */
 export function readSeatFromCookie(): CommitteeSeat {
   if (typeof document === 'undefined') return DEFAULT_COMMITTEE_SEAT
   const match = document.cookie.split('; ').find((c) => c.startsWith(`${SEAT_COOKIE_NAME}=`))

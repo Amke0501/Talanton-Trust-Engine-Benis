@@ -74,6 +74,32 @@ if (!useInMemoryDatabase && (string.IsNullOrWhiteSpace(connectionString) || HasP
         "For local development without PostgreSQL, set USE_INMEMORY_DB=true — the data is discarded when the process exits.");
 }
 
+// Authentication is Supabase's. The API needs only the project URL: the signing keys are public
+// and fetched from it, so there is no secret here to leak or to keep in step with a rotation.
+//
+// A missing URL is a hard failure for the same reason a missing connection string is. An API that
+// starts without authentication is not a degraded API — it is an open one, and it would look
+// perfectly healthy while every guardrail in this service could be bypassed by anyone who knew
+// the address. The local-development path below is opt-in by name and throws its data away.
+var supabaseUrl = FirstNonEmpty(
+    builder.Configuration["SUPABASE_URL"],
+    builder.Configuration["NEXT_PUBLIC_SUPABASE_URL"])?.TrimEnd('/');
+
+if (string.IsNullOrWhiteSpace(supabaseUrl) && !useInMemoryDatabase)
+{
+    throw new InvalidOperationException(
+        "SUPABASE_URL is not configured, so logins cannot be verified and every endpoint would be " +
+        "open. Set it to your Supabase project URL (https://<project>.supabase.co). For local " +
+        "development without Supabase, set USE_INMEMORY_DB=true, which also enables development " +
+        "tokens against a throwaway database.");
+}
+
+Console.WriteLine($"[DEBUG] Supabase auth authority: {supabaseUrl ?? "(none — local development tokens only)"}/auth/v1");
+
+builder.Services.AddHttpClient();
+builder.Services.AddScoped<SupabaseAdminService>();
+builder.Services.AddTalantonAuthentication(supabaseUrl, allowLocalDevTokens: useInMemoryDatabase);
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddControllers();
@@ -193,6 +219,10 @@ if (app.Environment.IsDevelopment())
 app.UseCors("FrontendPolicy");
 app.UseHttpsRedirection();
 
+// Who are you, then what may you do. Both must come before the endpoints they protect.
+app.UseAuthentication();
+app.UseAuthorization();
+
 app.MapControllers();
 
 app.MapGet("/", () =>
@@ -204,7 +234,7 @@ app.MapGet("/", () =>
         Environment = app.Environment.EnvironmentName,
         Timestamp = DateTime.UtcNow
     });
-});
+}).AllowAnonymous();
 
 app.Run();
 

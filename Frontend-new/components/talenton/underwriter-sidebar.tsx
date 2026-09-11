@@ -19,6 +19,7 @@ const NAV_ITEMS: { id: NavItem; label: string; icon: typeof LayoutDashboard }[] 
 ]
 
 import { NotificationBell } from '@/components/talenton/notification-bell'
+import { LogoutButton } from '@/components/talenton/logout-button'
 
 export function UnderwriterSidebar({
   active = 'home',
@@ -89,18 +90,7 @@ export function UnderwriterSidebar({
           <NotificationBell role="underwriter" audienceKey={notificationKey} />
         </div>
 
-        {/* A form, not a Link. Next prefetches links, and a prefetched GET to /logout cleared
-            the session cookies of anyone who merely had this sidebar on screen — which is why
-            the app appeared to log people out when they refreshed. */}
-        <form action="/logout" method="post">
-          <button
-            type="submit"
-            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-white/50 transition-colors hover:bg-white/8 hover:text-white/80"
-          >
-            <LogOut className="size-3.5" />
-            Logout
-          </button>
-        </form>
+        <LogoutButton />
       </div>
     </aside>
   )

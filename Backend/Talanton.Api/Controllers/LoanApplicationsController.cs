@@ -13,17 +13,52 @@ public class LoanApplicationsController : ControllerBase
     private readonly Services.LiquidityService _liquidity;
     private readonly Services.AuditService _audit;
     private readonly Data.ApplicationDbContext _context;
+    private readonly Services.CurrentUserService _currentUser;
 
     public LoanApplicationsController(
         ILoanApplicationService loanService,
         Services.LiquidityService liquidity,
         Services.AuditService audit,
-        Data.ApplicationDbContext context)
+        Data.ApplicationDbContext context,
+        Services.CurrentUserService currentUser)
     {
         _loanService = loanService;
         _liquidity = liquidity;
         _audit = audit;
         _context = context;
+        _currentUser = currentUser;
+    }
+
+    /// <summary>
+    /// The committee seat the caller actually holds, or a refusal.
+    ///
+    /// Every decision that moves money used to read the seat out of the request body, which meant
+    /// the caller chose their own authority: a request claiming "Treasurer" was treated as the
+    /// Treasurer. The seat now comes from the SACCO's records, keyed to a login Supabase has
+    /// verified, and the body is ignored.
+    /// </summary>
+    private async Task<(string? Seat, ActionResult? Refusal)> RequireCommitteeSeatAsync(
+        CancellationToken cancellationToken)
+    {
+        var user = await _currentUser.ResolveAsync(cancellationToken);
+
+        if (user is null)
+        {
+            return (null, StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                message = "This account is not registered with the SACCO.",
+            }));
+        }
+
+        if (!user.IsCommittee || string.IsNullOrWhiteSpace(user.CommitteeSeat))
+        {
+            return (null, StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                message = $"{user.FullName} does not hold a committee seat, so cannot vote or release funds.",
+            }));
+        }
+
+        return (user.CommitteeSeat, null);
     }
 
     [HttpGet]
@@ -95,6 +130,12 @@ public class LoanApplicationsController : ControllerBase
     [HttpPost("{reference}/vote")]
     public async Task<ActionResult<LoanApplicationDto>> CastVote(string reference, [FromBody] CastCommitteeVoteDto voteDto, CancellationToken cancellationToken)
     {
+        var (seat, refusal) = await RequireCommitteeSeatAsync(cancellationToken);
+        if (refusal is not null) return refusal;
+
+        // A member casts their own vote and only their own. The seat in the body is discarded.
+        voteDto.MemberRole = seat!;
+
         var updated = await _loanService.CastVoteAsync(reference, voteDto, cancellationToken);
         return updated == null ? NotFound() : Ok(updated);
     }
@@ -133,6 +174,12 @@ public class LoanApplicationsController : ControllerBase
         [FromBody] DisbursementAuthorizationDto authDto,
         CancellationToken cancellationToken)
     {
+        var (seat, refusal) = await RequireCommitteeSeatAsync(cancellationToken);
+        if (refusal is not null) return refusal;
+
+        // The releasing officer is whoever signed in, never whoever the request claims to be.
+        authDto.RequestorRole = seat!;
+
         var app = await _loanService.GetLoanApplicationByRefAsync(reference, cancellationToken);
         if (app == null)
             return NotFound(new { message = $"Loan application {reference} not found." });
@@ -203,6 +250,25 @@ public class LoanApplicationsController : ControllerBase
             var authorization = Services.EmergencyOverrideService.Evaluate(
                 authDto.EmergencyFirstSeat, authDto.EmergencySecondSeat, authDto.EmergencyReason);
 
+            // One of the two keys must belong to the officer making the request. Without this a
+            // single person could name two colleagues and release funds on their own — the exact
+            // thing two keys exist to prevent.
+            //
+            // This is not yet a full dual-key: the second officer's approval is asserted by the
+            // first rather than given in their own session. Recording it against both names in the
+            // audit trail is the current control; a true second approval needs its own sign-in.
+            if (authorization.IsAuthorized
+                && !seat!.Equals(authorization.FirstSeat, StringComparison.OrdinalIgnoreCase)
+                && !seat!.Equals(authorization.SecondSeat, StringComparison.OrdinalIgnoreCase))
+            {
+                authorization = new Services.OverrideAuthorizationResult
+                {
+                    IsAuthorized = false,
+                    Explanation = $"You are signed in as the {seat}, which is neither of the two " +
+                                  "signatures given. One of them must be your own.",
+                };
+            }
+
             var overrideRequested =
                 !string.IsNullOrWhiteSpace(authDto.EmergencyFirstSeat) ||
                 !string.IsNullOrWhiteSpace(authDto.EmergencySecondSeat) ||
@@ -267,10 +333,15 @@ public class LoanApplicationsController : ControllerBase
     public async Task<ActionResult<LoanApplicationDto>> RecordRepayment(
         string reference, [FromBody] RecordRepaymentDto dto, CancellationToken cancellationToken)
     {
+        var (seat, refusal) = await RequireCommitteeSeatAsync(cancellationToken);
+        if (refusal is not null) return refusal;
+
         if (dto.Amount <= 0)
         {
             return BadRequest(new { message = "A repayment amount greater than zero is required." });
         }
+
+        dto.RecordedByRole = seat!;
 
         var updated = await _loanService.RecordRepaymentAsync(reference, dto, cancellationToken);
         return updated == null ? NotFound(new { message = $"Loan application {reference} not found." }) : Ok(updated);

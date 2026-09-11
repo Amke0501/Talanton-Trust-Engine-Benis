@@ -4,6 +4,8 @@ import { Download, Scale, ShieldCheck, UserCheck, Vote } from 'lucide-react'
 import { STAGES, type RoleType, type StageKey } from '@/lib/talenton-data'
 import { cn } from '@/lib/utils'
 
+import { LogoutButton } from '@/components/talenton/logout-button'
+
 export function RoleHeader({
   activeRole,
   currentStage = 'verification',
@@ -83,16 +85,7 @@ export function RoleHeader({
             <span className="size-2 rounded-full bg-emerald-400 animate-pulse" />
             Unified Engine Active
           </div>
-          {/* Posted, not linked: a GET to /logout ends the session, and browsers and framework
-              prefetchers issue GETs on their own. See app/logout/route.ts. */}
-          <form action="/logout" method="post">
-            <button
-              type="submit"
-              className="inline-flex items-center rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/10"
-            >
-              Logout
-            </button>
-          </form>
+          <LogoutButton className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/10 disabled:opacity-50" />
         </div>
       </header>
 

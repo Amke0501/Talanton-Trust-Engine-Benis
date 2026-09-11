@@ -5,6 +5,7 @@ import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { FormEvent, useMemo, useState } from 'react'
 import { Eye, EyeOff, ArrowLeft } from 'lucide-react'
+import { signIn, signOut } from '@/lib/auth'
 import {
   AUTH_COOKIE_NAME,
   ROLE_COOKIE_NAME,
@@ -208,26 +209,56 @@ export function RoleLoginPage({ role }: { role: RoleType }) {
   const [showPw, setShowPw]     = useState(false)
   const [error, setError]       = useState('')
   const [loading, setLoading]   = useState(false)
-  const [seat, setSeat]         = useState<CommitteeSeat>(DEFAULT_COMMITTEE_SEAT)
 
   const meta = useMemo(() => ROLE_META[role], [role])
 
+  /**
+   * Signs in for real.
+   *
+   * This form used to check nothing at all: it wrote the session cookies and navigated, so any
+   * address and password reached any portal, and a committee member picked their own seat from a
+   * dropdown — the seat that decides who may release funds.
+   *
+   * Now Supabase verifies the credentials and the server says which portal the account belongs
+   * to. If that is not the portal being opened, the sign-in is refused rather than quietly
+   * redirected: someone who typed underwriter credentials into the committee page should be told
+   * what happened.
+   */
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setError('')
     setLoading(true)
-    const resolvedEmail = email || `${role}@talenton.com`
-    // Written with an explicit lifetime — see writeSessionCookie. Without one the browser was
-    // free to drop these before the next request, which the middleware read as "not signed in"
-    // and answered with a redirect to the landing page on the first refresh.
-    writeSessionCookie(AUTH_COOKIE_NAME, '1')
-    writeSessionCookie(ROLE_COOKIE_NAME, role)
-    writeSessionCookie(USER_EMAIL_COOKIE_NAME, encodeURIComponent(resolvedEmail))
-    // Committee members share one portal but sit in different seats, and the seat decides whose
-    // vote counts toward quorum and who may release funds.
-    if (role === 'committee') {
-      writeSessionCookie(SEAT_COOKIE_NAME, encodeURIComponent(seat))
+
+    const result = await signIn(email, password)
+
+    if (!result.ok) {
+      setError(result.reason)
+      setLoading(false)
+      return
     }
+
+    const { portalRole, fullName, committeeSeat } = result.identity
+
+    if (portalRole !== role) {
+      await signOut()
+      setError(
+        `${fullName} is registered for the ${portalRole} portal, not this one. ` +
+          `Sign in at the ${portalRole} page instead.`
+      )
+      setLoading(false)
+      return
+    }
+
+    if (portalRole === 'committee' && !committeeSeat) {
+      await signOut()
+      setError(
+        `${fullName} has no seat on the board, so cannot vote or release funds. ` +
+          'Ask an administrator to assign one.'
+      )
+      setLoading(false)
+      return
+    }
+
     router.replace(`/dashboard/${role}`)
   }
 
@@ -377,23 +408,13 @@ export function RoleLoginPage({ role }: { role: RoleType }) {
                   </div>
                 </label>
 
-                {/* Committee seat */}
+                {/* The board seat is a property of the account, not a choice at the door. It was
+                    a dropdown here, which meant anyone could sign in as the Treasurer. */}
                 {role === 'committee' && (
-                  <label className="flex flex-col gap-2">
-                    <span className="text-sm font-semibold text-[#103a27]">Your seat on the board</span>
-                    <select
-                      value={seat}
-                      onChange={(e) => setSeat(e.target.value as CommitteeSeat)}
-                      className="w-full rounded-[2rem] border border-gray-300 bg-white px-6 py-4 text-base text-[#103a27] outline-none transition focus:border-[#103a27] cursor-pointer"
-                    >
-                      {COMMITTEE_SEATS.map((s) => (
-                        <option key={s} value={s}>{s}</option>
-                      ))}
-                    </select>
-                    <span className="text-xs text-gray-500">
-                      Determines which vote you cast and whether you may release funds.
-                    </span>
-                  </label>
+                  <p className="rounded-2xl bg-[#f4f5f4] px-5 py-3 text-xs leading-relaxed text-gray-600">
+                    Your seat on the board comes from your account and decides which vote you cast
+                    and whether you may release funds. Ask an administrator if it needs changing.
+                  </p>
                 )}
 
                 {/* Error */}
