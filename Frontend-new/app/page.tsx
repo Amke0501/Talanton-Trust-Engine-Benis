@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { LoginModal } from '@/components/LoginModal'
+import { RequestAccessModal } from '@/components/RequestAccessModal'
 import { VideoModal } from '@/components/VideoModal'
 import { ArrowRight, Play } from 'lucide-react'
 import { BrandMark } from '@/components/talenton/brand-mark'
@@ -28,10 +29,14 @@ export default function RootPage() {
           <LoginModal>
             Log in
           </LoginModal>
-          <button className="rounded-full bg-[#103a27] text-white px-5 py-2.5 text-sm font-semibold hover:bg-[#124a31] transition-colors flex items-center gap-2 cursor-pointer">
-            Sign up
+          {/* This was a "Sign up" button wired to nothing at all. It could not be wired to
+              anything honest either: SACCO membership is vetted offline, so a stranger who
+              created their own login would be handed a working password and no access to
+              anything. The route in is the SACCO registering you. */}
+          <RequestAccessModal className="rounded-full bg-[#103a27] text-white px-5 py-2.5 text-sm font-semibold hover:bg-[#124a31] transition-colors flex items-center gap-2 cursor-pointer">
+            Request access
             <span className="bg-white text-[#103a27] rounded-full p-1"><ArrowRight className="size-3" strokeWidth={2.5} /></span>
-          </button>
+          </RequestAccessModal>
         </div>
       </nav>
 

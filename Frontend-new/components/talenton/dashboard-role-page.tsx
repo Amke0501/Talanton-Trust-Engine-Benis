@@ -38,6 +38,7 @@ import { CommitteeSidebar } from '@/components/talenton/committee-sidebar'
 import { CommitteeHomeView } from '@/components/talenton/committee-home-view'
 import { CommitteeLoansList } from '@/components/talenton/committee-loans-list'
 import { CreditPassportPanel } from '@/components/talenton/credit-passport-panel'
+import { RegisterMemberView } from '@/components/talenton/register-member-view'
 import { USER_EMAIL_COOKIE_NAME } from '@/lib/role-access'
 
 export function DashboardRolePage({ role }: { role: RoleType }) {
@@ -333,7 +334,7 @@ export function DashboardRolePage({ role }: { role: RoleType }) {
     if (role === 'underwriter') {
       return {
         active: activeNav,
-        allowedItems: ['home', 'applications', 'creditors', 'profile'] as NavItem[],
+        allowedItems: ['home', 'applications', 'creditors', 'members', 'profile'] as NavItem[],
         labels: {
           home: 'Dashboard',
           applications: 'Loan Reviews',
@@ -345,7 +346,7 @@ export function DashboardRolePage({ role }: { role: RoleType }) {
 
     return {
       active: activeNav,
-      allowedItems: ['home', 'applications', 'creditors'] as NavItem[],
+      allowedItems: ['home', 'applications', 'creditors', 'members'] as NavItem[],
       labels: {
         home: 'Dashboard',
         applications: 'Loan Reviews',
@@ -471,6 +472,11 @@ export function DashboardRolePage({ role }: { role: RoleType }) {
                 <CreditPassportPanel />
               </div>
             )}
+            {activeNav === 'members' && !activeUnderwriterAudit && (
+              <div className="pt-2">
+                <RegisterMemberView />
+              </div>
+            )}
             {activeUnderwriterAudit && (
               <UnderwriterDashboardView
                 application={application}
@@ -524,6 +530,11 @@ export function DashboardRolePage({ role }: { role: RoleType }) {
             {activeNav === 'creditors' && !activeCommitteeReview && (
               <div className="pt-2">
                 <CreditPassportPanel />
+              </div>
+            )}
+            {activeNav === 'members' && !activeCommitteeReview && (
+              <div className="pt-2">
+                <RegisterMemberView />
               </div>
             )}
             {activeCommitteeReview && (

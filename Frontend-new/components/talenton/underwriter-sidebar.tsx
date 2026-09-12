@@ -2,6 +2,7 @@
 
 import { cn } from '@/lib/utils'
 import {
+  UserPlus,
   LayoutDashboard,
   FileText,
   Users,
@@ -16,6 +17,7 @@ const NAV_ITEMS: { id: NavItem; label: string; icon: typeof LayoutDashboard }[] 
   { id: 'home',         label: 'Dashboard',      icon: LayoutDashboard },
   { id: 'applications', label: 'Loan Reviews',   icon: FileText },
   { id: 'creditors',    label: 'Credit Passport',icon: Users },
+  { id: 'members',      label: 'Members',        icon: UserPlus },
 ]
 
 import { NotificationBell } from '@/components/talenton/notification-bell'

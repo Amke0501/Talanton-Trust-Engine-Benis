@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react'
 import { LayoutGrid, FileText, Menu, Settings, UserCircle, X, Users } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-export type NavItem = 'home' | 'applications' | 'settings' | 'profile' | 'creditors'
+export type NavItem = 'home' | 'applications' | 'settings' | 'profile' | 'creditors' | 'members'
 
 const NAV_ITEMS: { id: NavItem; icon: typeof LayoutGrid; label: string }[] = [
   { id: 'home', icon: LayoutGrid, label: 'Home' },

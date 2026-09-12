@@ -72,6 +72,43 @@ public class AuthController : ControllerBase
     }
 
     /// <summary>
+    /// Whether this deployment can create logins, and how well. The registration screen asks
+    /// before showing a form that cannot work.
+    /// </summary>
+    [HttpGet("provisioning")]
+    public async Task<ActionResult<object>> ProvisioningStatus(CancellationToken cancellationToken)
+    {
+        var actor = await _currentUser.ResolveAsync(cancellationToken);
+        if (actor is null || !MemberRegistrationPolicy.CanRegisterAnyone(actor.PortalRole))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                message = "Only the underwriting desk or the committee may register members.",
+            });
+        }
+
+        // The form offers only what this caller may actually create, so nobody is invited to fill
+        // in a registration that will be refused on submission.
+        var registerable = MemberRegistrationPolicy.PortalsRegisterableBy(actor.PortalRole)
+            .Select(r => r.ToLowerInvariant())
+            .ToArray();
+
+        return Ok(new
+        {
+            canCreateAccounts = _admin.IsConfigured,
+            usingAdminKey = _admin.HasAdminKey,
+            registerablePortals = registerable,
+            seats = CurrentUserService.CommitteeSeats,
+            message = _admin.IsConfigured
+                ? (_admin.HasAdminKey
+                    ? "Logins are created already confirmed."
+                    : "Logins are created by ordinary sign-up, so they depend on the project's email " +
+                      "confirmation setting. Set SUPABASE_SERVICE_ROLE_KEY for the stronger route.")
+                : _admin.NotConfiguredMessage,
+        });
+    }
+
+    /// <summary>
     /// Registers a member and creates the login that goes with it.
     ///
     /// SACCO membership is vetted offline, so there is no public sign-up: an administrator creates
@@ -91,24 +128,24 @@ public class AuthController : ControllerBase
             return StatusCode(StatusCodes.Status403Forbidden, new { message = "Not a registered member." });
         }
 
-        // Only the underwriting desk and the committee administer accounts. An applicant cannot
-        // enrol anyone, least of all themselves into another portal.
-        if (actor.PortalRole is not ("underwriter" or "committee"))
+        // Who may enrol whom, decided before anything else. An applicant may enrol nobody; the
+        // underwriting desk may enrol borrowers; only the board may appoint a board seat.
+        //
+        // This runs ahead of the configuration check deliberately: someone with no authority to
+        // register anyone should be told that, not told about the server's Supabase setup. Answering
+        // "not configured" to an unauthorised caller both leaks the deployment's state and misleads
+        // them into thinking they would be allowed if only a key were set.
+        var permission = MemberRegistrationPolicy.Evaluate(actor.PortalRole, dto.PortalRole);
+        if (!permission.IsAllowed)
         {
-            return StatusCode(StatusCodes.Status403Forbidden, new
-            {
-                message = "Only the underwriting desk or the committee may register members.",
-            });
+            return StatusCode(StatusCodes.Status403Forbidden, new { message = permission.Reason });
         }
+
+        var role = permission.TargetRole!;
 
         if (!_admin.IsConfigured)
         {
-            return StatusCode(StatusCodes.Status501NotImplemented, new
-            {
-                message = "Account creation is not configured. Set SUPABASE_SERVICE_ROLE_KEY on the API " +
-                          "to create logins from here, or add the account in the Supabase dashboard and " +
-                          "register the member with the same email address.",
-            });
+            return StatusCode(StatusCodes.Status501NotImplemented, new { message = _admin.NotConfiguredMessage });
         }
 
         var email = dto.Email?.Trim().ToLowerInvariant();
@@ -120,12 +157,6 @@ public class AuthController : ControllerBase
         if (string.IsNullOrWhiteSpace(dto.FullName))
         {
             return BadRequest(new { message = "The member's full name is required." });
-        }
-
-        var role = NormalizeRole(dto.PortalRole);
-        if (role is null)
-        {
-            return BadRequest(new { message = "Portal must be applicant, underwriter or committee." });
         }
 
         if (role == "Committee"
@@ -195,7 +226,13 @@ public class AuthController : ControllerBase
             fullName = displayName,
             portalRole = role.ToLowerInvariant(),
             committeeSeat = role == "Committee" ? displayName : null,
-            message = $"{email} can now sign in.",
+            // Returned once and never stored: whoever registered the member has to be able to
+            // pass it on, and the member changes it afterwards.
+            initialPassword = created.InitialPassword,
+            canSignInImmediately = created.CanSignInImmediately,
+            message = created.CanSignInImmediately
+                ? $"{email} can now sign in."
+                : $"{email} was registered, but the login still needs confirming. {created.Error}",
         });
     }
 
@@ -243,11 +280,4 @@ public class AuthController : ControllerBase
         return membership?.MembershipNumber;
     }
 
-    private static string? NormalizeRole(string? portalRole) => portalRole?.Trim().ToLowerInvariant() switch
-    {
-        "applicant" => "Applicant",
-        "underwriter" => "Underwriter",
-        "committee" => "Committee",
-        _ => null,
-    };
 }

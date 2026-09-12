@@ -1211,6 +1211,75 @@ export async function markNotificationsRead(
 }
 
 // ----------------------------------------------------------------------
+// 4e. MEMBER REGISTRATION
+// ----------------------------------------------------------------------
+
+export interface ProvisioningStatus {
+  canCreateAccounts: boolean
+  usingAdminKey: boolean
+  /** The portals this signed-in member may enrol someone into. The server decides, not the form. */
+  registerablePortals: string[]
+  seats: string[]
+  message: string
+}
+
+export interface RegisteredMember {
+  email: string
+  fullName: string
+  portalRole: string
+  committeeSeat: string | null
+  /** Present only when the server generated one. Shown once and never stored. */
+  initialPassword: string | null
+  canSignInImmediately: boolean
+  message: string
+}
+
+/** Whether this deployment can create logins, so the form is not offered when it cannot work. */
+export async function fetchProvisioningStatus(): Promise<ProvisioningStatus | undefined> {
+  return requestBackend<ProvisioningStatus>('/api/auth/provisioning', { method: 'GET' })
+}
+
+/**
+ * Registers a vetted member and creates their login.
+ *
+ * Fails loudly rather than optimistically: an account that was not actually created must not be
+ * reported as one, because the next person to find out is the member who cannot sign in.
+ */
+export async function registerMember(payload: {
+  fullName: string
+  email: string
+  portalRole: string
+  committeeSeat?: string
+  password?: string
+}): Promise<{ ok: true; member: RegisteredMember } | { ok: false; reason: string }> {
+  const token = await getAccessToken()
+
+  try {
+    const response = await fetch(`${BACKEND_API_BASE_URL}/api/auth/accounts`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(payload),
+    })
+
+    const body = await response.json().catch(() => null)
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        reason: body?.message ?? `The member was not registered (${response.status}).`,
+      }
+    }
+
+    return { ok: true, member: body as RegisteredMember }
+  } catch {
+    return { ok: false, reason: 'Could not reach the server, so the member was not registered.' }
+  }
+}
+
+// ----------------------------------------------------------------------
 // 5. CREDIT PASSPORT REGISTRY
 // ----------------------------------------------------------------------
 
