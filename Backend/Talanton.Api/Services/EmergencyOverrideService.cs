@@ -12,10 +12,15 @@ namespace Talanton.Api.Services;
 public static class EmergencyOverrideService
 {
     /// <summary>
-    /// The seats trusted with a key. Deliberately narrow: the Credit Officer and Board Member
-    /// seats vote on files but do not hold the SACCO's cash.
+    /// The two seats that hold a key, named in the specification: the Board Chairman and the
+    /// Treasurer, and nobody else.
+    ///
+    /// This was briefly any two of Chairperson, Treasurer or Secretary, which quietly widened the
+    /// rule — it would have let the Treasurer and Secretary release funds against the cash lock
+    /// without the Chairman. An override is the one place where being more permissive than asked
+    /// is least defensible.
     /// </summary>
-    public static readonly string[] KeyHolderSeats = { "Chairperson", "Treasurer", "Secretary" };
+    public static readonly string[] KeyHolderSeats = { "Chairperson", "Treasurer" };
 
     /// <summary>A reason short enough to be meaningless is not a reason.</summary>
     public const int MinimumReasonLength = 15;

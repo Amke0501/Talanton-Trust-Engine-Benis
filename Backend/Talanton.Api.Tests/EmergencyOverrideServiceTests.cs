@@ -41,6 +41,7 @@ public class EmergencyOverrideServiceTests
     }
 
     [Theory]
+    [InlineData("Secretary")]
     [InlineData("Credit Officer")]
     [InlineData("Board Member")]
     [InlineData("Underwriter")]
@@ -79,10 +80,29 @@ public class EmergencyOverrideServiceTests
     [Fact]
     public void TheReasonIsTrimmedBeforeItIsRecorded()
     {
-        var result = EmergencyOverrideService.Evaluate("Secretary", "Treasurer", $"  {GoodReason}  ");
+        var result = EmergencyOverrideService.Evaluate("Treasurer", "Chairperson", $"  {GoodReason}  ");
 
         Assert.True(result.IsAuthorized);
         Assert.Equal(GoodReason, result.Reason);
+    }
+
+    [Fact]
+    public void OnlyTheChairmanAndTreasurerHoldKeys()
+    {
+        // The specification names these two and nobody else. The Secretary countersigns a big-loan
+        // release, which is a different rule — it does not make them a key holder here.
+        Assert.Equal(new[] { "Chairperson", "Treasurer" }, EmergencyOverrideService.KeyHolderSeats);
+
+        var result = EmergencyOverrideService.Evaluate("Treasurer", "Secretary", GoodReason);
+        Assert.False(result.IsAuthorized);
+        Assert.Contains("does not hold an emergency release key", result.Explanation);
+    }
+
+    [Fact]
+    public void TheOnlyValidPairingIsTheChairmanAndTheTreasurer()
+    {
+        Assert.True(EmergencyOverrideService.Evaluate("Chairperson", "Treasurer", GoodReason).IsAuthorized);
+        Assert.True(EmergencyOverrideService.Evaluate("Treasurer", "Chairperson", GoodReason).IsAuthorized);
     }
 
     [Fact]
