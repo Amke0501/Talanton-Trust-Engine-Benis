@@ -525,6 +525,10 @@ export function DashboardRolePage({ role }: { role: RoleType }) {
                   setApplication(app)
                   setActiveCommitteeReview(true)
                 }}
+                onRefresh={async () => {
+                  const refreshed = await fetchApplications()
+                  setApplications(refreshed)
+                }}
               />
             )}
             {activeNav === 'creditors' && !activeCommitteeReview && (

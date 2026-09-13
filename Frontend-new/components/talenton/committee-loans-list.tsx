@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { 
   FileText, 
   ArrowRight, 
@@ -11,20 +11,59 @@ import {
   XCircle, 
   Minus, 
   ThumbsUp, 
-  Users 
+  Users,
+  AlertTriangle
 } from 'lucide-react'
 import type { Application } from '@/lib/talenton-data'
 import { formatUGX, evaluateQuorum, terminatesAtUnderwriting } from '@/lib/talenton-data'
+import {
+  disburseBatch,
+  fetchLiquidityStatus,
+  type BatchDisbursementItem,
+  type LiquidityStatus,
+} from '@/lib/api-service'
+import { LiquidityIndicator } from '@/components/talenton/liquidity-indicator'
 
 export function CommitteeLoansList({
   applications,
   onSelectApplication,
+  onRefresh,
 }: {
   applications: Application[]
   onSelectApplication: (app: Application) => void
+  /** Called after a batch release so the queue reflects what just went out. */
+  onRefresh?: () => void
 }) {
   const [filter, setFilter] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'DISBURSED'>('ALL')
   const [searchQuery, setSearchQuery] = useState('')
+
+  // The cash position belongs at the top of this screen, not inside an opened file: a board
+  // member should see whether the SACCO can lend at all before choosing what to read.
+  const [liquidity, setLiquidity] = useState<LiquidityStatus | null>(null)
+  const [releasing, setReleasing] = useState(false)
+  const [batch, setBatch] = useState<{ reason: string; items: BatchDisbursementItem[] } | null>(null)
+
+  useEffect(() => {
+    let active = true
+    fetchLiquidityStatus().then((s) => active && setLiquidity(s ?? null))
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const cashLocked = liquidity?.isLocked ?? false
+  const cashUnknown = liquidity == null || liquidity.isAvailable === false
+
+  async function releaseBatch() {
+    setReleasing(true)
+    setBatch(null)
+    const result = await disburseBatch()
+    setReleasing(false)
+    setBatch({ reason: result.reason, items: result.items })
+    // Re-read rather than trusting the local figure: the batch just changed the position.
+    fetchLiquidityStatus().then((s) => setLiquidity(s ?? null))
+    if (result.released > 0) onRefresh?.()
+  }
 
   // Everything the committee may see. Counting is done from this list, never from the raw
   // `applications` array: the tab counts used to be computed before the declined-file filter, so
@@ -89,6 +128,82 @@ export function CommitteeLoansList({
           </div>
         </div>
       </div>
+
+      {/* Cash position and the master release. The specification puts this at the top of the loan
+          processing screen, interlocked with the batch action — the gate is only useful if it is
+          visible before a decision, not after opening a file. */}
+      <div className="grid gap-4 lg:grid-cols-5">
+        <div className="lg:col-span-3">
+          <LiquidityIndicator />
+        </div>
+
+        <div
+          className={`flex flex-col justify-between gap-3 rounded-2xl border p-4 lg:col-span-2 ${
+            cashLocked || cashUnknown ? 'border-rose-300 bg-rose-50' : 'border-emerald-200 bg-emerald-50'
+          }`}
+        >
+          <div>
+            <p className="text-[0.65rem] font-bold uppercase tracking-widest text-gray-600">
+              Batch release
+            </p>
+            <p className="mt-1 text-xs leading-relaxed text-gray-700">
+              {cashUnknown
+                ? 'The cash position could not be read, so nothing can be released.'
+                : cashLocked
+                ? `Blocked by the liquidity gate. ${formatUGX(liquidity!.deficit)} short of the 2:1 buffer.`
+                : `Releases every approved file the cash reaches, oldest first, up to ${formatUGX(
+                    liquidity!.maxSafeDisbursementCap
+                  )}.`}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={releaseBatch}
+            disabled={releasing || cashLocked || cashUnknown}
+            title={
+              cashLocked || cashUnknown
+                ? 'Disabled while the liquidity gate is locked'
+                : 'Release every approved file the cash position reaches'
+            }
+            className={`flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold transition-colors ${
+              cashLocked || cashUnknown
+                ? 'cursor-not-allowed bg-gray-300 text-gray-600'
+                : 'bg-[#103a27] text-white hover:bg-[#1a5235]'
+            }`}
+          >
+            <ShieldCheck className="size-3.5" />
+            {releasing ? 'Releasing…' : 'Approve & Disburse Batch'}
+          </button>
+        </div>
+      </div>
+
+      {batch && (
+        <div className="rounded-2xl border border-gray-200 bg-white p-4">
+          <p className="text-xs font-bold text-[#103a27]">{batch.reason}</p>
+          {batch.items.length > 0 && (
+            <ul className="mt-2.5 space-y-1.5">
+              {batch.items.map((item) => (
+                <li key={item.reference} className="flex flex-wrap items-baseline gap-x-2 text-[0.7rem]">
+                  <span className="font-mono font-semibold text-[#103a27]">{item.reference}</span>
+                  <span
+                    className={`rounded px-1.5 py-0.5 text-[0.6rem] font-bold uppercase ${
+                      item.released
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : item.deferred
+                        ? 'bg-amber-100 text-amber-900'
+                        : 'bg-rose-100 text-rose-800'
+                    }`}
+                  >
+                    {item.released ? 'Released' : item.deferred ? 'Deferred' : 'Held'}
+                  </span>
+                  <span className="text-gray-600">{item.reason}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* Filter Tabs */}
       <div className="flex flex-wrap gap-2">
@@ -157,6 +272,20 @@ export function CommitteeLoansList({
                       <p className="text-xs text-gray-500 mt-1">
                         Purpose: <span className="text-gray-700 font-medium">{app.purpose || 'Working Capital'}</span>
                       </p>
+
+                      {/* The committee's fixed 2:1 member limit, measured against the savings the
+                          SACCO records — not the figure declared on the application. It sits on the
+                          row because it bears on the decision being made there, rather than being
+                          something a board member has to go and look for. */}
+                      {app.isWithinMemberLimit === false && (
+                        <p className="mt-1.5 inline-flex items-start gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[0.65rem] font-semibold leading-snug text-rose-900">
+                          <AlertTriangle className="mt-px size-3 shrink-0" />
+                          <span>
+                            Exceeds 2:1 Member Limit. Requires{' '}
+                            {formatUGX(app.memberLimitShortfall ?? 0)} in Guarantor Deposits.
+                          </span>
+                        </p>
+                      )}
                       <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
                         <span>DTI: <strong className="text-gray-800">{app.dtiNetRatio?.toFixed(1) || '28.5'}%</strong></span>
                         <span>Multiplier: <strong className="text-gray-800">{app.multiplier || 3}x</strong></span>

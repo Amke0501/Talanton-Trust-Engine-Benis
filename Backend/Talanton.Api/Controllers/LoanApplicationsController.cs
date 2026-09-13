@@ -326,6 +326,147 @@ public class LoanApplicationsController : ControllerBase
     }
 
     /// <summary>
+    /// Releases every committee-approved file the cash position can reach, oldest first.
+    ///
+    /// This is the master control the liquidity specification is built around: one action over the
+    /// whole review bucket, interlocked with the 2:1 gate. Releasing file by file worked, but it
+    /// left the board doing the arithmetic that the gate exists to do for them — deciding by hand
+    /// which loans the cash covers and in what order.
+    ///
+    /// Nothing here bypasses a single-file rule. Each candidate is put through the same quorum,
+    /// authority, invoice and cash checks; a file that fails one is skipped with its reason and
+    /// the batch carries on. A file the cash will not reach is deferred, not refused.
+    /// </summary>
+    [HttpPost("disburse-batch")]
+    public async Task<ActionResult<BatchDisbursementResponseDto>> DisburseBatch(
+        [FromBody] DisbursementAuthorizationDto authDto, CancellationToken cancellationToken)
+    {
+        var (seat, refusal) = await RequireCommitteeSeatAsync(cancellationToken);
+        if (refusal is not null) return refusal;
+
+        authDto.RequestorRole = seat!;
+
+        var gate = await _liquidity.GetStatusForGateAsync(cancellationToken);
+        if (!gate.IsAvailable)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new BatchDisbursementResponseDto
+            {
+                Reason = "The SACCO's cash position could not be read, so nothing was released.",
+                LiquidityStatus = DescribeLiquidity(gate),
+            });
+        }
+
+        if (gate.IsLocked)
+        {
+            return StatusCode(StatusCodes.Status409Conflict, new BatchDisbursementResponseDto
+            {
+                Reason = $"SYSTEM LOCK: insufficient liquidity buffer. The ratio is " +
+                         $"{gate.CurrentLiquidityRatio:0.00} against a {Services.LiquidityService.MinimumSafeRatio:0.00} " +
+                         $"minimum, a shortfall of {gate.Deficit:N0}. No files were released.",
+                LiquidityStatus = DescribeLiquidity(gate),
+            });
+        }
+
+        var results = new List<BatchDisbursementItemDto>();
+        var released = 0;
+        decimal releasedValue = 0;
+
+        // Oldest commitment first. The queue is already in that order, and walking it in order is
+        // what makes the outcome fair rather than whatever the board happened to click.
+        foreach (var entry in gate.Queue)
+        {
+            var app = await _loanService.GetLoanApplicationByRefAsync(entry.Reference, cancellationToken);
+            if (app is null) continue;
+
+            var outcome = await TryReleaseAsync(app, authDto, seat!, entry, cancellationToken);
+            results.Add(outcome);
+
+            if (outcome.Released)
+            {
+                released++;
+                releasedValue += app.Principal;
+            }
+        }
+
+        var after = await _liquidity.GetStatusForGateAsync(cancellationToken);
+
+        return Ok(new BatchDisbursementResponseDto
+        {
+            Released = released,
+            ReleasedValue = releasedValue,
+            Considered = results.Count,
+            Reason = released == 0
+                ? "No files were released. Each is listed with the reason."
+                : $"Released {released} of {results.Count} file(s), {releasedValue:N0} in total.",
+            Items = results,
+            LiquidityStatus = DescribeLiquidity(after),
+        });
+    }
+
+    /// <summary>One file's turn through the same gates a single release passes.</summary>
+    private async Task<BatchDisbursementItemDto> TryReleaseAsync(
+        LoanApplicationDto app,
+        DisbursementAuthorizationDto authDto,
+        string seat,
+        Services.LiquidityQueueEntry entry,
+        CancellationToken cancellationToken)
+    {
+        var item = new BatchDisbursementItemDto
+        {
+            Reference = app.Reference,
+            ApplicantName = app.ApplicantName,
+            Principal = app.Principal,
+            QueuePosition = entry.QueuePosition,
+        };
+
+        var quorum = Services.QuorumEvaluationService.EvaluateQuorum(app.CommitteeVotes, app.Principal);
+        if (!quorum.IsQuorumPassed)
+        {
+            item.Reason = quorum.Reason;
+            return item;
+        }
+
+        var authority = Services.DisbursementAuthorizationService.EvaluateDisbursementAuthority(
+            app.Principal, seat,
+            !string.IsNullOrEmpty(authDto.ChairpersonSignature),
+            !string.IsNullOrEmpty(authDto.SecretarySignature));
+
+        if (!authority.IsAuthorized)
+        {
+            item.Reason = authority.Reason;
+            return item;
+        }
+
+        var invoiceHold = await GetInvoiceHoldAsync(app.MemberId, cancellationToken);
+        if (invoiceHold.IsHeld)
+        {
+            item.Reason = invoiceHold.Reason;
+            return item;
+        }
+
+        if (!entry.IsWithinSafeCap)
+        {
+            // Not refused — simply behind files that were committed earlier.
+            item.Deferred = true;
+            item.Reason = $"Deferred: awaiting liquidity. Releasing this file would take cumulative " +
+                          $"disbursement to {entry.CumulativeDemand:N0}, beyond the safe cap.";
+            await _loanService.DeferForLiquidityAsync(app.Reference, item.Reason, cancellationToken);
+            return item;
+        }
+
+        var updated = await _loanService.RouteStageAsync(app.Reference, "disbursement", cancellationToken);
+        if (updated is null || updated.Stage != "disbursed")
+        {
+            item.Reason = updated?.StatusNote ?? "The release did not complete.";
+            return item;
+        }
+
+        item.Released = true;
+        item.Reason = "Released.";
+        return item;
+    }
+
+    /// <summary>
     /// Money received against a disbursed loan. Settling it in full releases the guarantors'
     /// pledged shares back to them.
     /// </summary>
