@@ -1,6 +1,7 @@
 import {
   type Application,
   type ApplicantType,
+  type AppraisalReport,
   type CreditPassportMember,
   type Guarantor,
   type UserProfile,
@@ -172,6 +173,11 @@ interface ApiLoanApplication {
   amountRepaid?: number
   repaidAt?: string
   disbursedAt?: string
+  isWithinMemberLimit?: boolean
+  memberLimitShortfall?: number
+  memberRecordedSavings?: number
+  memberLimitMessage?: string
+  appraisalReport?: AppraisalReport
   guarantors?: {
     id: string
     name: string
@@ -228,6 +234,11 @@ function fromApi(a: ApiLoanApplication): Application {
     amountRepaid: Number(a.amountRepaid) || 0,
     repaidAt: a.repaidAt,
     disbursedAt: a.disbursedAt,
+    isWithinMemberLimit: a.isWithinMemberLimit ?? true,
+    memberLimitShortfall: Number(a.memberLimitShortfall) || 0,
+    memberRecordedSavings: Number(a.memberRecordedSavings) || 0,
+    memberLimitMessage: a.memberLimitMessage,
+    appraisalReport: a.appraisalReport,
     guarantors: (a.guarantors || []).map((g) => ({
       id: g.id,
       name: g.name,
@@ -657,6 +668,13 @@ export async function updateUnderwritingOverride(
     verdict?: 'APPROVED' | 'DECLINED'
     guarantors?: Guarantor[]
     adjustmentReason?: string
+    // The findings behind the adjustment. These were recorded on the underwriter's screen and
+    // never left it; the applicant is being asked to consent to a smaller loan on their basis.
+    crbCategory?: string
+    crbScore?: number
+    fieldAuditCharacter?: string
+    fieldAuditCapacity?: string
+    fieldAuditCollateral?: string
   }
 ): Promise<Application | undefined> {
   const raw = await requestBackend<ApiLoanApplication>(`/api/loanapplications/${encodeURIComponent(reference)}/underwrite`, {
@@ -670,6 +688,11 @@ export async function updateUnderwritingOverride(
       basicMonthlyPay: payload.basicMonthlyPay,
       monthlyDeductions: payload.monthlyDeductions,
       adjustmentReason: payload.adjustmentReason,
+      crbCategory: payload.crbCategory,
+      crbScore: payload.crbScore,
+      fieldAuditCharacter: payload.fieldAuditCharacter,
+      fieldAuditCapacity: payload.fieldAuditCapacity,
+      fieldAuditCollateral: payload.fieldAuditCollateral,
     }),
   })
 
@@ -1127,6 +1150,77 @@ export interface LiquidityStatus {
 /** Cash on hand against the principal already committed to files awaiting release. */
 export async function fetchLiquidityStatus(): Promise<LiquidityStatus | undefined> {
   return requestBackend<LiquidityStatus>('/api/liquidity/status', { method: 'GET' })
+}
+
+/** What happened to one file in a batch release. */
+export interface BatchDisbursementItem {
+  reference: string
+  applicantName: string
+  principal: number
+  queuePosition: number
+  released: boolean
+  /** Held for cash rather than refused on its merits. */
+  deferred: boolean
+  reason: string
+}
+
+export interface BatchDisbursementResult {
+  ok: boolean
+  released: number
+  releasedValue: number
+  considered: number
+  reason: string
+  items: BatchDisbursementItem[]
+}
+
+/**
+ * Releases every approved file the cash position reaches, oldest first.
+ *
+ * The master control the liquidity specification is built around. It is interlocked with the 2:1
+ * gate on the server, so a locked position releases nothing at all — the button being disabled in
+ * the browser is a courtesy, not the control.
+ */
+export async function disburseBatch(
+  emergency?: EmergencyRelease
+): Promise<BatchDisbursementResult> {
+  const token = await getAccessToken()
+
+  try {
+    const response = await fetch(`${BACKEND_API_BASE_URL}/api/loanapplications/disburse-batch`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        chairpersonSignature: 'OTP_VERIFIED',
+        secretarySignature: 'OTP_VERIFIED',
+        emergencyFirstSeat: emergency?.firstSeat,
+        emergencySecondSeat: emergency?.secondSeat,
+        emergencyReason: emergency?.reason,
+      }),
+    })
+
+    const body = await response.json().catch(() => null)
+
+    return {
+      ok: response.ok,
+      released: body?.released ?? 0,
+      releasedValue: body?.releasedValue ?? 0,
+      considered: body?.considered ?? 0,
+      reason: body?.reason ?? `The batch was refused (${response.status}).`,
+      items: body?.items ?? [],
+    }
+  } catch {
+    return {
+      ok: false,
+      released: 0,
+      releasedValue: 0,
+      considered: 0,
+      reason: 'Could not reach the server, so nothing was released.',
+      items: [],
+    }
+  }
 }
 
 // ----------------------------------------------------------------------

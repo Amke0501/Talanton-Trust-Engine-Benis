@@ -54,6 +54,33 @@ export interface DocumentSlot {
   rejectionReason?: string
 }
 
+/** One check on an application, and whether it cleared. */
+export interface AppraisalFinding {
+  check: string
+  passed: boolean
+  detail: string
+}
+
+/**
+ * The underwriter's findings, sent to the applicant with a revised offer so they can see what the
+ * adjustment was based on rather than only that a number changed.
+ */
+export interface AppraisalReport {
+  originalPrincipal: number
+  originalTenureMonths: number
+  revisedPrincipal: number
+  revisedTenureMonths: number
+  reason: string
+  guardrails: AppraisalFinding[]
+  crbCategory?: string
+  crbScore?: number
+  fieldAuditCharacter?: string
+  fieldAuditCapacity?: string
+  fieldAuditCollateral?: string
+  preparedBy?: string
+  preparedAt?: string
+}
+
 export interface Guarantor {
   id: string
   name: string
@@ -181,6 +208,13 @@ export interface Application extends ApplicationDraft {
   emergencyOverrideAt?: string
   amountRepaid?: number
   repaidAt?: string
+  /** The committee's fixed 2:1 member limit, measured against the SACCO's own savings record. */
+  isWithinMemberLimit?: boolean
+  memberLimitShortfall?: number
+  memberRecordedSavings?: number
+  memberLimitMessage?: string
+  /** Sent with a revised offer; absent otherwise. */
+  appraisalReport?: AppraisalReport
   appraisalOfficer?: string
   securitySignature?: string
   committeeVotes?: BoardMemberVote[]

@@ -285,6 +285,11 @@ public class LoanApplicationService : ILoanApplicationService
     {
         var resultList = new List<LoanApplicationDto>();
 
+        // The savings the SACCO actually holds, loaded once. The member limit is measured against
+        // this rather than the figure typed on the application — a declared balance is the
+        // applicant's claim, and the limit exists precisely to test the claim.
+        var savingsByMember = await LoadRecordedSavingsAsync(cancellationToken);
+
         try
         {
             var dbApps = await _context.LoanApplications
@@ -300,12 +305,14 @@ public class LoanApplicationService : ILoanApplicationService
                 {
                     var overlaid = OverlayPersistedWorkflow(existingInMemory, app);
                     await HydrateFromDatabaseAsync(overlaid, app.Id, cancellationToken);
+                    ApplyMemberLimit(overlaid, savingsByMember);
                     resultList.Add(overlaid);
                 }
                 else
                 {
                     var dto = ToDto(app);
                     await HydrateFromDatabaseAsync(dto, app.Id, cancellationToken);
+                    ApplyMemberLimit(dto, savingsByMember);
                     resultList.Add(dto);
                 }
             }
@@ -322,11 +329,55 @@ public class LoanApplicationService : ILoanApplicationService
         {
             if (!resultList.Any(r => r.Id == memApp.Id || r.Reference.Equals(memApp.Reference, StringComparison.OrdinalIgnoreCase)))
             {
+                ApplyMemberLimit(memApp, savingsByMember);
                 resultList.Add(memApp);
             }
         }
 
         return resultList;
+    }
+
+    /// <summary>Membership number to the savings balance the SACCO records against it.</summary>
+    private async Task<Dictionary<string, decimal>> LoadRecordedSavingsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _context.SaccoMemberships
+                .Where(m => m.MembershipNumber != null && m.MembershipNumber != "")
+                .GroupBy(m => m.MembershipNumber)
+                .Select(g => new { Member = g.Key, Savings = g.Max(m => m.SavingsBalance) })
+                .ToDictionaryAsync(x => x.Member, x => x.Savings, StringComparer.OrdinalIgnoreCase, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ERROR] Could not read membership savings ({ex.GetType().Name}): {ex.Message}. " +
+                              "The 2:1 member limit will be measured against the figure on each application, " +
+                              "which is the applicant's own claim.");
+            return new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    /// <summary>
+    /// Stamps the committee's 2:1 member limit onto one file.
+    ///
+    /// Falls back to the declared savings when the SACCO has no membership record, and the message
+    /// says which figure was used — measuring a limit against an unverified number without saying
+    /// so is worse than not measuring it.
+    /// </summary>
+    private static void ApplyMemberLimit(LoanApplicationDto dto, IReadOnlyDictionary<string, decimal> savingsByMember)
+    {
+        var hasRecord = !string.IsNullOrWhiteSpace(dto.MemberId)
+                        && savingsByMember.TryGetValue(dto.MemberId, out var recorded);
+        var savings = hasRecord ? savingsByMember[dto.MemberId] : dto.SavingsBalance;
+
+        var result = MemberSavingsService.EvaluateMemberLimit(dto.Principal, savings);
+
+        dto.IsWithinMemberLimit = result.IsWithinLimit;
+        dto.MemberLimitShortfall = result.ShortfallAmount;
+        dto.MemberRecordedSavings = savings;
+        dto.MemberLimitMessage = hasRecord
+            ? result.Message
+            : result.Message + " (measured against the application's declared savings; no membership record found.)";
     }
 
     public async Task<LoanApplicationDto?> GetLoanApplicationByRefAsync(string reference, CancellationToken cancellationToken = default)
@@ -536,6 +587,11 @@ public class LoanApplicationService : ILoanApplicationService
                 ? "Underwriter reduced the requested amount or adjusted the tenure after review."
                 : dto.AdjustmentReason;
             app.CounterOfferStatus = "PENDING";
+
+            // Built here, after the reason is set — it quotes that reason, and building it any
+            // earlier sent the applicant a report with the explanation missing.
+            app.AppraisalReport = BuildAppraisal(app, dto, originalPrincipal, originalTenure);
+
             app.ApplicantConsentReceived = false;
             app.ApplicantConsentAt = null;
             app.Verdict = "PENDING";
@@ -595,6 +651,59 @@ public class LoanApplicationService : ILoanApplicationService
         }
 
         return app;
+    }
+
+    /// <summary>
+    /// The underwriter's findings, assembled for the applicant.
+    ///
+    /// Every figure here is already on the file; the gap was that none of it travelled with the
+    /// revised offer. Someone being asked to accept a smaller loan should see which checks the
+    /// file cleared and which it did not, not simply that a number changed.
+    /// </summary>
+    private static AppraisalReportDto BuildAppraisal(
+        LoanApplicationDto app, UpdateUnderwritingOverrideDto dto,
+        decimal originalPrincipal, int originalTenure)
+    {
+        var pledged = app.Guarantors.Sum(g => g.PledgedShares);
+        var gap = Math.Max(0, app.Principal - app.SavingsBalance);
+
+        return new AppraisalReportDto
+        {
+            OriginalPrincipal = originalPrincipal,
+            OriginalTenureMonths = originalTenure,
+            RevisedPrincipal = dto.RequestedPrincipal,
+            RevisedTenureMonths = dto.TenureMonths,
+            Reason = app.CounterOfferReason ?? string.Empty,
+            Guardrails = new List<AppraisalFindingDto>
+            {
+                new()
+                {
+                    Check = "Deposit multiplier",
+                    Passed = app.GuardrailDepositMultiplierPassed,
+                    Detail = $"{app.Principal:N0} against a cap of {app.SavingsBalance * app.Multiplier:N0} " +
+                             $"({app.SavingsBalance:N0} savings × {app.Multiplier:0.##}).",
+                },
+                new()
+                {
+                    Check = "One-third take-home pay",
+                    Passed = app.GuardrailOneThirdPayPassed,
+                    Detail = $"Repayments would leave {app.NetTakeHome:N0} of {app.MonthlyIncome:N0} monthly income.",
+                },
+                new()
+                {
+                    Check = "Guarantor cover",
+                    Passed = app.GuardrailGuarantorPassed,
+                    Detail = $"{pledged:N0} pledged against an uncollateralised gap of {gap:N0}.",
+                },
+            },
+            CrbCategory = dto.CrbCategory,
+            CrbScore = dto.CrbScore,
+            FieldAuditCharacter = dto.FieldAuditCharacter,
+            FieldAuditCapacity = dto.FieldAuditCapacity,
+            FieldAuditCollateral = dto.FieldAuditCollateral,
+            PreparedBy = app.AppraisalOfficer,
+            PreparedAt = DateTime.UtcNow,
+        };
     }
 
     /// <summary>
@@ -1125,6 +1234,20 @@ public class LoanApplicationService : ILoanApplicationService
                 $"{app.Principal:N0} UGX has been released over {app.TenureMonths} months. Repayment starts next month.",
                 app.Reference, app.MemberId, cancellationToken);
 
+            // "Shares are automatically locked, and the guarantor is notified" — the second half
+            // was missing. A guarantor whose shares are committed against someone else's loan has
+            // to hear it from the SACCO, not discover it when their own application is refused.
+            foreach (var guarantor in app.Guarantors)
+            {
+                await _notify.RaiseAsync(
+                    NotificationAudiences.Applicant,
+                    NotificationEvents.SharesLocked,
+                    $"Your shares are pledged against {app.Reference}",
+                    $"{guarantor.PledgedShares:N0} UGX of your shares are now committed as security for " +
+                    $"{app.ApplicantName}'s loan, and cannot back another application until it is repaid.",
+                    app.Reference, guarantor.MemberId, cancellationToken);
+            }
+
             if (app.Guarantors.Count > 0)
             {
                 await _notify.RaiseAsync(
@@ -1243,6 +1366,20 @@ public class LoanApplicationService : ILoanApplicationService
             isSettled ? $"{reference} is fully repaid" : $"Repayment received on {reference}",
             app.StatusNote,
             app.Reference, app.MemberId, cancellationToken);
+
+        if (isSettled)
+        {
+            foreach (var guarantor in app.Guarantors)
+            {
+                await _notify.RaiseAsync(
+                    NotificationAudiences.Applicant,
+                    NotificationEvents.SharesReleased,
+                    $"Your shares are released from {reference}",
+                    $"{guarantor.PledgedShares:N0} UGX of your shares are free again: the loan you " +
+                    "guaranteed has been repaid in full.",
+                    app.Reference, guarantor.MemberId, cancellationToken);
+            }
+        }
 
         if (isSettled && app.Guarantors.Count > 0)
         {
@@ -1506,6 +1643,9 @@ public class LoanApplicationService : ILoanApplicationService
         entity.CounterOfferTermMonths = app.CounterOfferTenureMonths;
         entity.CounterOfferReason = app.CounterOfferReason;
         entity.CounterOfferStatus = string.IsNullOrWhiteSpace(app.CounterOfferStatus) ? "NONE" : app.CounterOfferStatus;
+        entity.CounterOfferAppraisalJson = app.AppraisalReport is null
+            ? null
+            : System.Text.Json.JsonSerializer.Serialize(app.AppraisalReport);
         entity.ApplicantConsentAt = app.ApplicantConsentAt;
         entity.ApplicantConsentReceived = app.ApplicantConsentReceived;
 
@@ -1564,6 +1704,9 @@ public class LoanApplicationService : ILoanApplicationService
         dto.CounterOfferTenureMonths = entity.CounterOfferTermMonths;
         dto.CounterOfferReason = entity.CounterOfferReason;
         dto.CounterOfferStatus = string.IsNullOrWhiteSpace(entity.CounterOfferStatus) ? "NONE" : entity.CounterOfferStatus;
+        dto.AppraisalReport = string.IsNullOrWhiteSpace(entity.CounterOfferAppraisalJson)
+            ? null
+            : System.Text.Json.JsonSerializer.Deserialize<AppraisalReportDto>(entity.CounterOfferAppraisalJson);
         dto.ApplicantConsentAt = entity.ApplicantConsentAt;
         dto.ApplicantConsentReceived = entity.ApplicantConsentReceived;
 

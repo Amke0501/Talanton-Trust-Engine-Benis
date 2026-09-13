@@ -29,6 +29,8 @@ import {
 
 import { ReplacementGuarantorsPanel } from '@/components/talenton/replacement-guarantors-panel'
 
+import { AppraisalReportPanel } from '@/components/talenton/appraisal-report'
+
 export function ApplicantDashboardView({
   application,
   onUpdateApplication,
@@ -250,6 +252,10 @@ export function ApplicantDashboardView({
             {application.counterOfferReason && (
               <p className="text-xs text-amber-900">{application.counterOfferReason}</p>
             )}
+
+                      {application.appraisalReport && (
+                        <AppraisalReportPanel report={application.appraisalReport} />
+                      )}
 
             <div className="flex flex-wrap gap-2">
               <button

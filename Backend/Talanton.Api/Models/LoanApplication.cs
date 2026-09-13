@@ -86,6 +86,13 @@ public class LoanApplication
 
     public string CounterOfferStatus { get; set; } = "NONE";
 
+    /// <summary>
+    /// The appraisal sent with the revised offer, stored as JSON so it is exactly what the
+    /// applicant was shown at the time rather than something recomputed later from figures that
+    /// have since moved on.
+    /// </summary>
+    public string? CounterOfferAppraisalJson { get; set; }
+
     public DateTime? ApplicantConsentAt { get; set; }
 
     public bool ApplicantConsentReceived { get; set; }

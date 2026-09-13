@@ -22,6 +22,8 @@ import {
 } from '@/lib/talenton-data'
 import { ReplacementGuarantorsPanel } from '@/components/talenton/replacement-guarantors-panel'
 
+import { AppraisalReportPanel } from '@/components/talenton/appraisal-report'
+
 export function ApplicantDashboard({
   userName,
   applications,
@@ -269,6 +271,10 @@ export function ApplicantDashboard({
                         {' '}&bull; Tenure: <strong>{app.counterOfferTenureMonths ?? app.tenureMonths} months</strong>
                       </p>
                       {app.counterOfferReason && <p className="text-xs text-amber-900">{app.counterOfferReason}</p>}
+
+                      {app.appraisalReport && (
+                        <AppraisalReportPanel report={app.appraisalReport} />
+                      )}
                       <p className="text-[0.7rem] text-amber-800">
                         Declining keeps the file open, but {app.minimumAdditionalGuarantorsRequired || 2} additional
                         guarantors will then be required before it can be reconsidered.

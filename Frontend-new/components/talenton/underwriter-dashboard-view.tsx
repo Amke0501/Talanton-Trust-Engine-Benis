@@ -207,6 +207,11 @@ export function UnderwriterDashboardView({
       verdict: overallPassed ? 'APPROVED' : 'DECLINED',
       guarantors,
       adjustmentReason: adjustmentReason.trim() || undefined,
+      crbCategory,
+      crbScore,
+      fieldAuditCharacter: characterAudit,
+      fieldAuditCapacity: capacityAudit,
+      fieldAuditCollateral: collateralAudit,
     })
     onUpdateApplication({ ...updatedFields, ...(underwritingResult || {}) })
     setIsSigning(false)

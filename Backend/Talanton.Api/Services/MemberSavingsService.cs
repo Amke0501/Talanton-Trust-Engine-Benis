@@ -15,6 +15,55 @@ namespace Talanton.Api.Services;
 /// </summary>
 public class MemberSavingsService
 {
+    /// <summary>
+    /// The committee's member-level limit: a member may not borrow more than twice the savings the
+    /// SACCO holds for them.
+    ///
+    /// This is a different rule from the underwriting multiplier above it, and deliberately so.
+    /// The multiplier is a policy dial an underwriter may set per applicant — three times savings
+    /// by default. This is a fixed ceiling the credit committee applies at the point of approval,
+    /// and it does not move. A file can satisfy a 3x underwriting cap and still breach it, which is
+    /// the whole reason the committee checks again.
+    /// </summary>
+    public const decimal MemberLimitRatio = 2.0m;
+
+    private static readonly System.Globalization.CultureInfo Invariant =
+        System.Globalization.CultureInfo.InvariantCulture;
+
+    /// <summary>
+    /// Whether this member's own savings support the amount requested, at the committee's fixed
+    /// 2:1 limit. Shown against each row on the loan processing screen.
+    /// </summary>
+    public static MemberLimitResult EvaluateMemberLimit(decimal requestedPrincipal, decimal recordedSavings)
+    {
+        var limit = recordedSavings * MemberLimitRatio;
+        var within = requestedPrincipal <= limit;
+        var shortfall = within ? 0m : requestedPrincipal - limit;
+
+        return new MemberLimitResult
+        {
+            IsWithinLimit = within,
+            RecordedSavings = recordedSavings,
+            MaximumBorrowable = limit,
+            RequestedPrincipal = requestedPrincipal,
+            ShortfallAmount = shortfall,
+            // The wording the committee asked for, naming what would close the gap rather than
+            // only that there is one.
+            //
+            // Formatted against the invariant culture explicitly, not left to whatever the host
+            // happens to be set to. The exact text is specified by the client, so it must not
+            // become "3 000 000" on one machine and "3,000,000" on another — and a process-wide
+            // culture setting is the kind of ambient state that silently differs between the app
+            // and anything else that calls this.
+            Message = within
+                ? string.Format(Invariant,
+                    "Within the 2:1 member limit: {0:N0} against {1:N0} ({2:N0} savings × 2).",
+                    requestedPrincipal, limit, recordedSavings)
+                : string.Format(Invariant,
+                    "Exceeds 2:1 Member Limit. Requires {0:N0} in Guarantor Deposits.", shortfall),
+        };
+    }
+
     public static MemberSavingsResult Evaluate(
         decimal requestedPrincipal,
         decimal recordedSavings,
@@ -101,4 +150,27 @@ public class MemberSavingsResult
 
     /// <summary>Declared minus recorded. Positive means the application overstates savings.</summary>
     public decimal DeclaredSavingsDifference { get; set; }
+}
+
+
+/// <summary>
+/// The committee's fixed 2:1 check on one member, as shown beside their loan on the processing
+/// screen.
+/// </summary>
+public class MemberLimitResult
+{
+    public bool IsWithinLimit { get; set; }
+
+    /// <summary>Savings the SACCO holds for this member.</summary>
+    public decimal RecordedSavings { get; set; }
+
+    /// <summary>Recorded savings × 2.</summary>
+    public decimal MaximumBorrowable { get; set; }
+
+    public decimal RequestedPrincipal { get; set; }
+
+    /// <summary>What the member would need covered in guarantor deposits; zero when within limit.</summary>
+    public decimal ShortfallAmount { get; set; }
+
+    public string Message { get; set; } = string.Empty;
 }

@@ -39,6 +39,13 @@ public class LoanApplicationDto
     /// </summary>
     public int MinimumAdditionalGuarantorsRequired { get; set; }
 
+    /// <summary>
+    /// The appraisal sent with a revised offer: the guardrail findings, the credit record and the
+    /// field audit that explain why the amount changed. The applicant is being asked to consent to
+    /// a smaller loan, which is not a decision anyone can make from a single sentence.
+    /// </summary>
+    public AppraisalReportDto? AppraisalReport { get; set; }
+
     /// <summary>Set when a release was held back because the SACCO's cash position is too thin.</summary>
     public DateTime? DeferredForLiquidityAt { get; set; }
     public string? DeferredForLiquidityReason { get; set; }
@@ -52,6 +59,21 @@ public class LoanApplicationDto
     public DateTime? RepaidAt { get; set; }
     public DateTime? DisbursedAt { get; set; }
 
+    // ── The committee's fixed 2:1 member limit, shown against this file on the loan processing
+    // screen. Carried on the application itself so the list can show it per row without asking
+    // the server once per line.
+
+    /// <summary>False when the request exceeds twice the member's recorded savings.</summary>
+    public bool IsWithinMemberLimit { get; set; } = true;
+
+    /// <summary>What would need covering in guarantor deposits; zero when within the limit.</summary>
+    public decimal MemberLimitShortfall { get; set; }
+
+    /// <summary>The savings the SACCO holds for this member, not the figure on the application.</summary>
+    public decimal MemberRecordedSavings { get; set; }
+
+    public string MemberLimitMessage { get; set; } = string.Empty;
+
     public List<GuarantorDto> Guarantors { get; set; } = new();
     public List<CommitteeVoteDetailDto> CommitteeVotes { get; set; } = new();
     public string RepaymentProgress { get; set; } = string.Empty;
@@ -59,6 +81,37 @@ public class LoanApplicationDto
     public decimal Arrears { get; set; }
     public string AppraisalOfficer { get; set; } = "Agaba Collins (Risk Division)";
     public string SecuritySignature { get; set; } = "OTP Signed (Verified)";
+}
+
+/// <summary>The underwriter's findings, as shown to the applicant with a revised offer.</summary>
+public class AppraisalReportDto
+{
+    public decimal OriginalPrincipal { get; set; }
+    public int OriginalTenureMonths { get; set; }
+    public decimal RevisedPrincipal { get; set; }
+    public int RevisedTenureMonths { get; set; }
+
+    /// <summary>The underwriter's own words on why the terms changed.</summary>
+    public string Reason { get; set; } = string.Empty;
+
+    /// <summary>Each guardrail, and whether this file cleared it.</summary>
+    public List<AppraisalFindingDto> Guardrails { get; set; } = new();
+
+    public string? CrbCategory { get; set; }
+    public int? CrbScore { get; set; }
+    public string? FieldAuditCharacter { get; set; }
+    public string? FieldAuditCapacity { get; set; }
+    public string? FieldAuditCollateral { get; set; }
+
+    public string PreparedBy { get; set; } = string.Empty;
+    public DateTime PreparedAt { get; set; }
+}
+
+public class AppraisalFindingDto
+{
+    public string Check { get; set; } = string.Empty;
+    public bool Passed { get; set; }
+    public string Detail { get; set; } = string.Empty;
 }
 
 public class GuarantorDto
@@ -114,6 +167,19 @@ public class UpdateUnderwritingOverrideDto
     public decimal BasicMonthlyPay { get; set; }
     public decimal MonthlyDeductions { get; set; }
     public string? AdjustmentReason { get; set; }
+
+    // ── The appraisal behind the adjustment ───────────────────────────────────────────────────
+    //
+    // "The revised amount should be sent to the applicant with an appraisal report explaining the
+    // underwriter's reason." A single sentence is a reason, not a report. These are the findings
+    // the underwriter already records against the file; they simply never reached the person whose
+    // loan was being reduced.
+
+    public string? CrbCategory { get; set; }
+    public int? CrbScore { get; set; }
+    public string? FieldAuditCharacter { get; set; }
+    public string? FieldAuditCapacity { get; set; }
+    public string? FieldAuditCollateral { get; set; }
 }
 
 public class CounterOfferDecisionDto
@@ -272,4 +338,34 @@ public class DisbursementAuthorizationResponseDto
 
     /// <summary>The cash position at the moment of the decision, when one was read.</summary>
     public object? LiquidityStatus { get; set; }
+}
+
+
+/// <summary>The outcome of releasing a whole review bucket in one action.</summary>
+public class BatchDisbursementResponseDto
+{
+    public int Released { get; set; }
+    public decimal ReleasedValue { get; set; }
+    public int Considered { get; set; }
+    public string Reason { get; set; } = string.Empty;
+    public List<BatchDisbursementItemDto> Items { get; set; } = new();
+
+    /// <summary>The cash position after the batch, so the screen can refresh from one response.</summary>
+    public object? LiquidityStatus { get; set; }
+}
+
+/// <summary>What happened to one file in a batch, and why.</summary>
+public class BatchDisbursementItemDto
+{
+    public string Reference { get; set; } = string.Empty;
+    public string ApplicantName { get; set; } = string.Empty;
+    public decimal Principal { get; set; }
+    public int QueuePosition { get; set; }
+
+    public bool Released { get; set; }
+
+    /// <summary>True when the file was held for cash rather than refused on its merits.</summary>
+    public bool Deferred { get; set; }
+
+    public string Reason { get; set; } = string.Empty;
 }
